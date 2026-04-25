@@ -91,15 +91,14 @@ class TestImageUtils(unittest.TestCase):
                 bbox,
                 resolution=10,
                 max_pixels=2500,
-                overlap=0.1,
             )
 
         self.assertEqual((n_rows, n_cols), (2, 2))
         self.assertEqual(len(sub_bboxes), 4)
         self.assertAlmostEqual(sub_bboxes[0].min_x, 0.0)
         self.assertAlmostEqual(sub_bboxes[0].min_y, 0.0)
-        self.assertAlmostEqual(sub_bboxes[0].max_x, 5.5)
-        self.assertAlmostEqual(sub_bboxes[0].max_y, 5.5)
+        self.assertAlmostEqual(sub_bboxes[0].max_x, 5.0)
+        self.assertAlmostEqual(sub_bboxes[0].max_y, 5.0)
         self.assertAlmostEqual(sub_bboxes[-1].max_x, 10.0)
         self.assertAlmostEqual(sub_bboxes[-1].max_y, 10.0)
 
@@ -153,8 +152,8 @@ class TestSentinelRequest(unittest.TestCase):
                 bbox,
                 "2023-06-01",
                 "2023-07-01",
-                "evalscript",
-                resolution=10,
+                50,
+                60,
             )
 
         self.assertEqual(
@@ -171,7 +170,7 @@ class TestSentinelRequest(unittest.TestCase):
         self.assertEqual(request["input"]["data"][0]["type"], "sentinel-2-l2a")
         self.assertEqual(request["output"]["width"], 60)
         self.assertEqual(request["output"]["height"], 50)
-        self.assertEqual(request["evalscript"], "evalscript")
+        self.assertIsInstance(request["evalscript"], str)
 
 
 class TestSentinelFetchToken(unittest.TestCase):
