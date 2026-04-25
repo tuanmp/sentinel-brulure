@@ -21,7 +21,7 @@ make dev     # uv sync --group dev
 ## Run Demo
 
 ```bash
-uv run python scripts/run_sentinel_demo.py
+PYTHONPATH=. uv run python scripts/run_sentinel_demo.py
 ```
 
 ## Architecture
@@ -31,10 +31,13 @@ data_pipeline/
   sentinel_request.py  # Sentinel API, OAuth token mgmt, bbox fetching
   sentinel_utils.py   # NBR computation: (NIR - SWIR2) / (NIR + SWIR2)
   image_utils.py      # bbox splitting, tiling, stitch, GeoTIFF export
-  firm_request.py     # STUB — FIRMS integration not implemented yet
+  firm_request.py     # FIRMS fire event polling
   __init__.py
 scripts/
   run_sentinel_demo.py  # Demo entry point
+planning/
+  project-plan.md      # Full project specification
+  firms-api-notes.md    # FIRMS API integration details
 ```
 
 ## Required Env Vars
@@ -44,6 +47,7 @@ sentinel_client_id      # Copernicus Data Space OAuth client ID
 sentinel_client_secret  # OAuth client secret
 sentinel_token_url      # Token endpoint URL
 sentinel_request_url    # Process API endpoint
+firm_map_key            # NASA FIRMS API key
 ```
 
 ## Key Design Patterns
@@ -55,7 +59,7 @@ sentinel_request_url    # Process API endpoint
 
 ## Gotchas
 
-- `firm_request.py` is an empty stub — FIRMS polling not yet implemented
+- `firm_request.py` is an empty stub — implement using `planning/firms-api-notes.md`
 - `make lint` and `make format` exclude notebooks (they have lint issues that are ignored)
 - Tests in `tests/` use both pytest (explicit) and unittest (implicit via inheritance) styles
 - `.env` is gitignored — never commit API credentials
