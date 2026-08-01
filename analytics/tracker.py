@@ -5,12 +5,25 @@ from .postfire import analyze_postfire
 from .prefire import analyze_prefire
 from .recovery import RECOVERY_OFFSETS_MONTHS, analyze_recovery, recovery_due
 
+MAX_FAILURES = 10
+
 
 def _merge_observations(existing: list[dict], new_rows: list[dict]) -> list[dict]:
     by_date = {row["date"]: row for row in existing}
     for row in new_rows:
         by_date[row["date"]] = row
     return sorted(by_date.values(), key=lambda row: row["date"])
+
+
+def _record_failure(event, error: str) -> None:
+    event.failures.append(
+        {
+            "status": event.status,
+            "error": error,
+            "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+    )
+    event.failures = event.failures[-MAX_FAILURES:]
 
 
 def _dispatch(event, resolution, use_model, quiet_after, today):
@@ -25,7 +38,7 @@ def _dispatch(event, resolution, use_model, quiet_after, today):
         )
         if latest:
             last_date = datetime.strptime(latest, "%Y-%m-%d").date()
-            event.quiet_days = (today - last_date).days
+            event.quiet_days = max(0, (today - last_date).days)
             event.end_date = max(event.end_date, latest)
         else:
             event.quiet_days += 1
@@ -59,17 +72,18 @@ def process_event(
     quiet_after: int = 3,
     today=None,
 ):
-    """Run one tick for a single event. Returns the (mutated) event."""
+    """Run one tick for a single event. Returns the (mutated) event.
+
+    Any exception raised by the current phase is treated as a transient
+    runtime failure: the event keeps its state so the next tick retries, and
+    the failure is recorded in ``event.failures`` (capped at ``MAX_FAILURES``
+    entries to bound stored state). Genuine programming errors therefore
+    surface in the failure log rather than crashing the scheduler.
+    """
     today = today or date.today()
     try:
         _dispatch(event, resolution, use_model, quiet_after, today)
         event.failures = []
     except Exception as exc:  # phase failed; keep state, retry next tick
-        event.failures.append(
-            {
-                "status": event.status,
-                "error": str(exc),
-                "at": datetime.now(UTC).isoformat(timespec="seconds"),
-            }
-        )
+        _record_failure(event, str(exc))
     return event

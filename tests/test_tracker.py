@@ -116,3 +116,72 @@ def test_failure_marks_failure_and_keeps_state():
         tracker.process_event(event, resolution=60, today=date(2026, 7, 20))
     assert event.status == "detected"
     assert len(event.failures) == 1
+
+
+def test_success_clears_prior_failures():
+    event = _event()
+    event.failures = [{"status": "detected", "error": "x", "at": "t"}]
+    with patch("analytics.tracker.analyze_prefire", return_value={"ndvi": 0.5}):
+        tracker.process_event(event, resolution=60, today=date(2026, 7, 20))
+    assert event.status == "active"
+    assert event.failures == []
+
+
+def test_active_no_observations_increments_quiet_days():
+    event = _event(status="active")
+    with patch("analytics.tracker.fetch_daily_observations", return_value=[]):
+        tracker.process_event(
+            event, resolution=60, quiet_after=3, today=date(2026, 7, 22)
+        )
+    assert event.status == "ended"
+    assert event.quiet_days == 3
+
+
+def test_active_keeps_later_end_date():
+    event = _event(status="active")
+    event.end_date = "2026-07-20"
+    rows = [
+        {
+            "date": "2026-07-18",
+            "frp_mw": 100.0,
+            "detection_count": 5,
+            "bbox_growth_deg": 0.1,
+        }
+    ]
+    with patch("analytics.tracker.fetch_daily_observations", return_value=rows):
+        tracker.process_event(
+            event, resolution=60, quiet_after=3, today=date(2026, 7, 19)
+        )
+    assert event.end_date == "2026-07-20"
+
+
+def test_future_observation_quiet_days_never_negative():
+    event = _event(status="active")
+    rows = [
+        {
+            "date": "2026-07-20",
+            "frp_mw": 100.0,
+            "detection_count": 5,
+            "bbox_growth_deg": 0.1,
+        }
+    ]
+    with patch("analytics.tracker.fetch_daily_observations", return_value=rows):
+        tracker.process_event(
+            event, resolution=60, quiet_after=3, today=date(2026, 7, 19)
+        )
+    assert event.quiet_days == 0
+    assert event.status == "active"
+
+
+def test_failures_capped_at_max():
+    event = _event()
+    event.failures = [
+        {"status": "detected", "error": f"e{i}", "at": "t"}
+        for i in range(tracker.MAX_FAILURES)
+    ]
+    with patch(
+        "analytics.tracker.analyze_prefire", side_effect=RuntimeError("no data")
+    ):
+        tracker.process_event(event, resolution=60, today=date(2026, 7, 20))
+    assert len(event.failures) == tracker.MAX_FAILURES
+    assert event.failures[-1]["error"] == "no data"
