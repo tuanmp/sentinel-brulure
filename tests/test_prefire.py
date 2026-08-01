@@ -64,3 +64,32 @@ def test_analyze_prefire():
     assert metrics["ndwi"] == pytest.approx(-0.23076923076923078)
     assert metrics["weather_index"] == 50.0
     assert "fetched_on" in metrics
+
+
+def test_mean_metric_returns_none_when_all_non_finite():
+    assert prefire.mean_metric(np.array([np.inf, np.nan])) is None
+    assert prefire.mean_metric(np.array([np.nan, np.nan])) is None
+    assert prefire.mean_metric(np.array([np.inf, np.inf])) is None
+
+
+def test_mean_metric_ignores_non_finite_values():
+    assert prefire.mean_metric(np.array([0.5, np.inf, np.nan])) == 0.5
+
+
+def test_analyze_prefire_weather_index_none_when_no_rows():
+    event = FireEvent(
+        event_id="e1",
+        country="france",
+        bbox=[4.2, 44.3, 4.8, 44.8],
+        centroid_lat=44.55,
+        centroid_lon=4.5,
+        start_date="2026-07-12",
+        end_date="2026-07-18",
+    )
+    with (
+        patch("analytics.prefire.fetch_bbox", return_value=_bands()),
+        patch("analytics.prefire.fetch_fire_weather", return_value=[]),
+    ):
+        metrics = prefire.analyze_prefire(event)
+
+    assert metrics["weather_index"] is None

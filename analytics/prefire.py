@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 from sentinelhub import CRS, BBox
@@ -30,10 +30,10 @@ def compute_ndwi(bands: np.ndarray) -> np.ndarray:
 
 
 def mean_metric(index: np.ndarray) -> float | None:
-    valid = index[~np.isnan(index)]
+    valid = index[np.isfinite(index)]
     if valid.size == 0:
         return None
-    return float(np.nanmean(valid))
+    return float(np.mean(valid))
 
 
 def prefire_window(start_date: str) -> tuple[str, str]:
@@ -61,5 +61,5 @@ def analyze_prefire(event, resolution: int = 60) -> dict:
         "ndwi": mean_metric(compute_ndwi(bands)),
         "weather_index": weather_index,
         "window": list(window),
-        "fetched_on": datetime.utcnow().isoformat(timespec="seconds"),
+        "fetched_on": datetime.now(UTC).isoformat(timespec="seconds"),
     }
