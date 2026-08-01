@@ -1,3 +1,5 @@
+import pytest
+
 from analytics.event import FireEvent
 from analytics.store import EventStore
 
@@ -17,9 +19,10 @@ def _event(event_id="evt-1"):
 
 def test_save_and_load_round_trip(tmp_path):
     store = EventStore(root=tmp_path)
-    store.save_event(_event())
+    event = _event()
+    store.save_event(event)
     loaded = store.load_event("evt-1")
-    assert loaded is not None
+    assert loaded == event
     assert loaded.country == "spain"
     assert loaded.status == "detected"
 
@@ -44,3 +47,17 @@ def test_update_overwrites(tmp_path):
     event.status = "active"
     store.update_event(event)
     assert store.load_event("evt-1").status == "active"
+    assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_load_corrupt_json_returns_none(tmp_path):
+    store = EventStore(root=tmp_path)
+    (tmp_path / "evt-1.json").write_text('"{not json"')
+    assert store.load_event("evt-1") is None
+    assert store.list_events() == []
+
+
+def test_path_traversal_raises_value_error(tmp_path):
+    store = EventStore(root=tmp_path)
+    with pytest.raises(ValueError):
+        store.load_event("../evil")
