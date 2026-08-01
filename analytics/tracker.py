@@ -26,22 +26,27 @@ def _record_failure(event, error: str) -> None:
     event.failures = event.failures[-MAX_FAILURES:]
 
 
+def _refresh_during(event, today) -> None:
+    """Fetch and merge FIRMS during-observations, updating quiet/end state."""
+    rows = fetch_daily_observations(event)
+    event.during_observations = _merge_observations(event.during_observations, rows)
+    latest = (
+        event.during_observations[-1]["date"] if event.during_observations else None
+    )
+    if latest:
+        last_date = datetime.strptime(latest, "%Y-%m-%d").date()
+        event.quiet_days = max(0, (today - last_date).days)
+        event.end_date = max(event.end_date, latest)
+    else:
+        event.quiet_days += 1
+
+
 def _dispatch(event, resolution, use_model, quiet_after, today):
     if event.status == "detected":
         event.prefire_metrics = analyze_prefire(event, resolution=resolution)
         event.transition("active")
     elif event.status == "active":
-        rows = fetch_daily_observations(event)
-        event.during_observations = _merge_observations(event.during_observations, rows)
-        latest = (
-            event.during_observations[-1]["date"] if event.during_observations else None
-        )
-        if latest:
-            last_date = datetime.strptime(latest, "%Y-%m-%d").date()
-            event.quiet_days = max(0, (today - last_date).days)
-            event.end_date = max(event.end_date, latest)
-        else:
-            event.quiet_days += 1
+        _refresh_during(event, today)
         if event.quiet_days >= quiet_after:
             event.transition("ended")
     elif event.status == "ended":
@@ -50,6 +55,7 @@ def _dispatch(event, resolution, use_model, quiet_after, today):
         )
         event.transition("recovering")
     elif event.status == "recovering":
+        _refresh_during(event, today)
         sampled = {sample["offset_months"] for sample in event.recovery_samples}
         due = [
             month

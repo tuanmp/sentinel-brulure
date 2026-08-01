@@ -102,10 +102,31 @@ def test_recovering_samples_due_months_and_completes():
     def fake_analyze_recovery(ev, month, resolution=60):
         return {"offset_months": month, "ndvi": 0.5}
 
-    with patch("analytics.tracker.analyze_recovery", side_effect=fake_analyze_recovery):
+    with patch(
+        "analytics.tracker.fetch_daily_observations", return_value=[]
+    ), patch("analytics.tracker.analyze_recovery", side_effect=fake_analyze_recovery):
         tracker.process_event(event, resolution=60, today=date(2027, 7, 30))
     assert event.status == "complete"
     assert len(event.recovery_samples) == 5
+
+
+def test_recovering_fetches_during_observations():
+    event = _event(status="recovering")
+    rows = [
+        {
+            "date": "2026-07-18",
+            "frp_mw": 100.0,
+            "detection_count": 5,
+            "bbox_growth_deg": 0.1,
+        }
+    ]
+    with patch(
+        "analytics.tracker.fetch_daily_observations", return_value=rows
+    ), patch("analytics.tracker.analyze_recovery", return_value={"ndvi": 0.5}):
+        tracker.process_event(event, resolution=60, today=date(2026, 7, 25))
+    assert event.status == "recovering"
+    assert len(event.during_observations) == 1
+    assert event.during_observations[0]["date"] == "2026-07-18"
 
 
 def test_failure_marks_failure_and_keeps_state():

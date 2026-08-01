@@ -50,6 +50,14 @@ def test_update_overwrites(tmp_path):
     assert len(list(tmp_path.glob("*.json"))) == 1
 
 
+def test_delete_event_removes_and_reports(tmp_path):
+    store = EventStore(root=tmp_path)
+    store.save_event(_event())
+    assert store.delete_event("evt-1") is True
+    assert store.load_event("evt-1") is None
+    assert store.delete_event("evt-1") is False
+
+
 def test_load_corrupt_json_returns_none(tmp_path):
     store = EventStore(root=tmp_path)
     (tmp_path / "evt-1.json").write_text('"{not json"')

@@ -29,6 +29,14 @@ class EventStore:
     def update_event(self, event: FireEvent) -> None:
         self.save_event(event)
 
+    def delete_event(self, event_id: str) -> bool:
+        """Delete an event by id. Returns True if it existed."""
+        path = self._path(event_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     def load_event(self, event_id: str) -> FireEvent | None:
         path = self._path(event_id)
         if not path.exists():
