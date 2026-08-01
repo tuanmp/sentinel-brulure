@@ -1,0 +1,35 @@
+import json
+from pathlib import Path
+
+from .event import FireEvent
+
+DEFAULT_ROOT = Path(__file__).resolve().parent.parent / "reports" / "events"
+
+
+class EventStore:
+    """JSON-backed event store. Thin interface so a DB backend can replace it."""
+
+    def __init__(self, root: Path | str | None = None):
+        self.root = Path(root) if root else DEFAULT_ROOT
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, event_id: str) -> Path:
+        return self.root / f"{event_id}.json"
+
+    def save_event(self, event: FireEvent) -> None:
+        payload = event.to_dict()
+        self._path(event.event_id).write_text(
+            json.dumps(payload, indent=2, default=str)
+        )
+
+    def update_event(self, event: FireEvent) -> None:
+        self.save_event(event)
+
+    def load_event(self, event_id: str) -> FireEvent | None:
+        path = self._path(event_id)
+        if not path.exists():
+            return None
+        return FireEvent.from_dict(json.loads(path.read_text()))
+
+    def list_events(self) -> list[FireEvent]:
+        return [self.load_event(p.stem) for p in sorted(self.root.glob("*.json"))]
