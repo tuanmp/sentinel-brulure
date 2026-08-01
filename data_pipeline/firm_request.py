@@ -1,6 +1,8 @@
 import io
 import logging
 import os
+from datetime import date
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -16,8 +18,21 @@ logging.basicConfig(
 )
 
 ENV_FIRM_API_KEY = "firm_map_key"
-DEFAULT_DAYS_BACK = 7
+DEFAULT_DAYS_BACK = 5
+MAX_DAYS_BACK = 5
 DEFAULT_MIN_CONFIDENCE = "nominal"
+
+DATA_AVAILABILITY_URL = "https://firms.modaps.eosdis.nasa.gov/api/data_availability/csv"
+
+# Standard Processing (SP) archives reach back years; the matching NRT source
+# covers only the most recent ~3 months. Preferred source per window is chosen
+# by get_data_availability().
+SOURCE_ARCHIVE_MAP = {
+    "VIIRS_SNPP_NRT": "VIIRS_SNPP_SP",
+    "VIIRS_NOAA20_NRT": "VIIRS_NOAA20_SP",
+    "VIIRS_NOAA21_NRT": "VIIRS_NOAA21_SP",
+    "MODIS_NRT": "MODIS_SP",
+}
 
 REGIONS = {
     "europe": {"bbox": [-25, 35, 45, 75], "name": "Europe"},
@@ -56,19 +71,27 @@ def fetch_fire_events(
     days_back: int = DEFAULT_DAYS_BACK,
     min_confidence: str = DEFAULT_MIN_CONFIDENCE,
     source: str = "VIIRS_SNPP_NRT",
+    date: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch fire detections from FIRMS API for a given region.
 
     Args:
-        region: One of REGIONS keys or "world" for global
-        days_back: Number of days to query (max 10)
+        region: One of REGIONS/COUNTRY_REGIONS keys or "world"
+        days_back: Number of days to query per request (1-5)
         min_confidence: "low", "nominal", or "high"
         source: FIRMS data source (default VIIRS_SNPP_NRT)
+        date: Optional YYYY-MM-DD anchor. When provided, returns detections
+            for [date, date + days_back). Without it, returns the most recent
+            days_back days. Use this to page back through arbitrary history.
 
     Returns:
         DataFrame with fire detections
     """
+    if not (1 <= days_back <= MAX_DAYS_BACK):
+        raise ValueError(
+            f"days_back must be between 1 and {MAX_DAYS_BACK}, got {days_back}"
+        )
     api_key = _get_api_key()
 
     if region == "world":
@@ -86,9 +109,13 @@ def fetch_fire_events(
         )
 
     url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{api_key}/{source}/{bbox_str}/{days_back}"
+    if date is not None:
+        url += f"/{date}"
 
-    logging.info(f"Fetching FIRMS data for region={region}, days={days_back}")
-    response = requests.get(url)
+    logging.info(
+        f"Fetching FIRMS data for region={region}, source={source}, days={days_back}, date={date}"
+    )
+    response = requests.get(url, timeout=30)
     response.raise_for_status()
 
     df = pd.read_csv(io.StringIO(response.text))
@@ -102,6 +129,64 @@ def fetch_fire_events(
 
     logging.info(f"Fetched {len(df)} fire detections")
     return df
+
+
+@lru_cache(maxsize=16)
+def get_data_availability(
+    source: str,
+    region: str = "world",
+    days_back: int = 1,
+) -> tuple[date | None, date | None]:
+    """
+    Return (min_date, max_date) over which a FIRMS source has data.
+
+    Cached so the during-phase can pick the right source per window without
+    hammering the API. An unavailable/empty response yields (None, None).
+    """
+    api_key = _get_api_key()
+
+    if region == "world":
+        bbox_str = "world"
+    elif region in REGIONS:
+        bbox = REGIONS[region]["bbox"]
+        bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+    elif region in COUNTRY_REGIONS:
+        bbox = COUNTRY_REGIONS[region]["bbox"]
+        bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+    else:
+        raise ValueError(
+            f"Unknown region: {region}. Use: {list(REGIONS.keys())} "
+            f"or {list(COUNTRY_REGIONS.keys())} or 'world'"
+        )
+
+    url = f"{DATA_AVAILABILITY_URL}/{api_key}/{source}/{bbox_str}/{days_back}"
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    rows = pd.read_csv(io.StringIO(response.text))
+    if rows.empty or "min_date" not in rows.columns or "max_date" not in rows.columns:
+        return None, None
+    row = rows.iloc[0]
+    return date.fromisoformat(str(row["min_date"])), date.fromisoformat(
+        str(row["max_date"])
+    )
+
+
+def pick_source(window_start: date, window_end: date, source: str) -> str:
+    """
+    Choose the FIRMS source whose data availability covers [window_start, window_end].
+
+    Prefers the given (usually NRT) source when its archive reaches far enough
+    back; otherwise falls back to the paired Standard Processing archive.
+    """
+    archive = SOURCE_ARCHIVE_MAP.get(source)
+    min_date, _ = get_data_availability(source)
+    if min_date is not None and min_date <= window_start:
+        return source
+    if archive is not None:
+        return archive
+    raise ValueError(
+        f"Source {source} has no data for {window_start} and no archive fallback"
+    )
 
 
 def cluster_detections(
@@ -149,16 +234,23 @@ def cluster_detections(
         min_lat = cluster["latitude"].min() - buffer
         max_lat = cluster["latitude"].max() + buffer
 
-        events.append({
-            "cluster_id": int(cluster_id),
-            "detection_count": int(len(cluster)),
-            "total_frp_mw": float(cluster["frp"].sum()),
-            "start_date": str(cluster["acq_date"].min()),
-            "end_date": str(cluster["acq_date"].max()),
-            "bbox": [float(min_lon), float(min_lat), float(max_lon), float(max_lat)],
-            "centroid_lat": float(cluster["latitude"].mean()),
-            "centroid_lon": float(cluster["longitude"].mean()),
-        })
+        events.append(
+            {
+                "cluster_id": int(cluster_id),
+                "detection_count": int(len(cluster)),
+                "total_frp_mw": float(cluster["frp"].sum()),
+                "start_date": str(cluster["acq_date"].min()),
+                "end_date": str(cluster["acq_date"].max()),
+                "bbox": [
+                    float(min_lon),
+                    float(min_lat),
+                    float(max_lon),
+                    float(max_lat),
+                ],
+                "centroid_lat": float(cluster["latitude"].mean()),
+                "centroid_lon": float(cluster["longitude"].mean()),
+            }
+        )
 
     events = sorted(events, key=lambda x: x["total_frp_mw"], reverse=True)
     logging.info(f"Clustered into {len(events)} fire events")
@@ -221,7 +313,9 @@ def fetch_and_process(
     Returns:
         List of fire event dicts compatible with sentinel_request.process_fire_event()
     """
-    df = fetch_fire_events(region=region, days_back=days_back, min_confidence=min_confidence)
+    df = fetch_fire_events(
+        region=region, days_back=days_back, min_confidence=min_confidence
+    )
     events = cluster_detections(df)
     events = filter_events(events)
     if country:

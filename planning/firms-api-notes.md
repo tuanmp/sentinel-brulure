@@ -8,14 +8,36 @@ Fetches near-real-time fire detections from NASA FIRMS to trigger Sentinel-2 ima
 
 ```
 GET https://firms.modaps.eosdis.nasa.gov/api/area/csv/{API_KEY}/{source}/{region}/{days_back}
+GET https://firms.modaps.eosdis.nasa.gov/api/area/csv/{API_KEY}/{source}/{region}/{days_back}/{date}
 ```
+
+The optional trailing `{date}` (YYYY-MM-DD) **anchors the window**: it returns
+detections for `[date, date + days_back)`. Without it, you get the most recent
+`days_back` days. This is how the during-phase pages back through arbitrary
+history for month-long fires — in 5-day chunks.
 
 | Param | Values | Notes |
 |-------|--------|-------|
 | `API_KEY` | string | From `firm_map_key` env var |
-| `source` | `VIIRS_SNPP_NRT`, `VIIRS_NOAA20_NRT` | VIIRS near-real-time satellites |
-| `region` | `world` or named region | Used `world` for global |
-| `days_back` | 1–10 | API max is 10 days |
+| `source` | `VIIRS_SNPP_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT`, `MODIS_NRT` (+ `*_SP` archives) | See sources below |
+| `region` | `world`, named region, or `west,south,east,north` bbox | `france`, `spain`, `italy`, `greece` supported |
+| `days_back` | 1–5 | Per-request max is **5 days** (not 10); page with the `date` anchor to go further back |
+
+## Data Sources and Archives
+
+Each NRT source covers only the most recent ~3 months. The paired Standard
+Processing (`_SP`) archive reaches back years, so the full history is seamless:
+
+| Source | Archive coverage |
+|--------|------------------|
+| `MODIS_SP` | 2000-11-01 → present (~3 mo latency) |
+| `VIIRS_SNPP_SP` | 2012-01-20 → present (~3 mo latency) |
+| `VIIRS_NOAA20_SP` | 2018-04-01 → present |
+| `VIIRS_SNPP_NRT` (etc.) | ~last 3 months |
+
+`get_data_availability(source)` returns `(min_date, max_date)` per source and is
+cached; `pick_source(window_start, window_end, source)` prefers the NRT source
+when it covers the window and falls back to the `_SP` archive otherwise.
 
 ## Returned Fields (CSV)
 
