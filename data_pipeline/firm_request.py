@@ -24,6 +24,13 @@ REGIONS = {
     "north_america": {"bbox": [-170, 15, -50, 75], "name": "North America"},
 }
 
+COUNTRY_REGIONS = {
+    "france": {"bbox": [-5.5, 41.0, 9.5, 51.5], "name": "France"},
+    "spain": {"bbox": [-9.5, 35.5, 3.5, 44.0], "name": "Spain"},
+    "italy": {"bbox": [6.5, 36.0, 18.5, 47.5], "name": "Italy"},
+    "greece": {"bbox": [19.0, 34.5, 28.5, 41.5], "name": "Greece"},
+}
+
 CLUSTER_SETTINGS = {
     "eps_km": 10,
     "min_samples": 5,
@@ -69,8 +76,14 @@ def fetch_fire_events(
     elif region in REGIONS:
         bbox = REGIONS[region]["bbox"]
         bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+    elif region in COUNTRY_REGIONS:
+        bbox = COUNTRY_REGIONS[region]["bbox"]
+        bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
     else:
-        raise ValueError(f"Unknown region: {region}. Use: {list(REGIONS.keys())} or 'world'")
+        raise ValueError(
+            f"Unknown region: {region}. Use: {list(REGIONS.keys())} "
+            f"or {list(COUNTRY_REGIONS.keys())} or 'world'"
+        )
 
     url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{api_key}/{source}/{bbox_str}/{days_back}"
 
@@ -193,14 +206,17 @@ def fetch_and_process(
     region: str = "world",
     days_back: int = DEFAULT_DAYS_BACK,
     min_confidence: str = DEFAULT_MIN_CONFIDENCE,
+    country: str | None = None,
 ) -> list[dict]:
     """
     Full pipeline: fetch, cluster, and filter fire events.
 
     Args:
-        region: Regional filter ("europe", "north_america", or "world")
+        region: Regional filter ("europe", "north_america", "world", or a
+            COUNTRY_REGIONS key like "france")
         days_back: Days of historical data to fetch
         min_confidence: Minimum confidence level
+        country: Optional country tag added to each returned event
 
     Returns:
         List of fire event dicts compatible with sentinel_request.process_fire_event()
@@ -208,6 +224,9 @@ def fetch_and_process(
     df = fetch_fire_events(region=region, days_back=days_back, min_confidence=min_confidence)
     events = cluster_detections(df)
     events = filter_events(events)
+    if country:
+        for event in events:
+            event["country"] = country
     return events
 
 
