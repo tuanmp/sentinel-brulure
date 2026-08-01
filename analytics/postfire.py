@@ -45,10 +45,18 @@ def analyze_postfire(event, resolution: int = 60, use_model: bool = False) -> di
     result = process_fire_event(event_dict, resolution=resolution, use_model=use_model)
     dnbr = result["dnbr"]
 
+    valid = dnbr[~np.isnan(dnbr)]
+    if valid.size == 0:
+        stats = {"dnbr_mean": None, "dnbr_min": None, "dnbr_max": None}
+    else:
+        stats = {
+            "dnbr_mean": float(np.mean(valid)),
+            "dnbr_min": float(np.min(valid)),
+            "dnbr_max": float(np.max(valid)),
+        }
+
     return {
-        "dnbr_mean": float(np.nanmean(dnbr)),
-        "dnbr_min": float(np.nanmin(dnbr)),
-        "dnbr_max": float(np.nanmax(dnbr)),
+        **stats,
         "severity_classes": classify_severity(dnbr),
         "burned_area_ha": estimate_burned_area(dnbr, resolution),
         "fetched_on": datetime.now(UTC).isoformat(timespec="seconds"),
