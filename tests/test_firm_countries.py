@@ -12,7 +12,8 @@ def _csv_text():
     )
 
 
-def test_fetch_fire_events_supports_country_region():
+@patch("data_pipeline.firm_request.os.getenv", return_value="test-api-key")
+def test_fetch_fire_events_supports_country_region(mock_getenv):
     with patch("data_pipeline.firm_request.requests.get") as mock_get:
         mock_get.return_value = Mock(status_code=200)
         mock_get.return_value.text = _csv_text()
@@ -25,7 +26,8 @@ def test_fetch_fire_events_supports_country_region():
     assert "confidence_label" in df.columns
 
 
-def test_fetch_fire_events_unknown_region_raises():
+@patch("data_pipeline.firm_request.os.getenv", return_value="test-api-key")
+def test_fetch_fire_events_unknown_region_raises(mock_getenv):
     try:
         fr.fetch_fire_events(region="atlantis", days_back=3)
         raise AssertionError("expected ValueError")
