@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import argparse
 import os
 
 import numpy as np
@@ -11,14 +17,27 @@ from data_pipeline.sentinel_request import (
 )
 
 
-def main(use_firms: bool = True, region: str = "north_america", days_back: int = 3):
+def main():
+    parser = argparse.ArgumentParser(description='Sentinel Sat Burn Scar Detection')
+    parser.add_argument('--use-model', action='store_true',
+                        help='Use Prithvi model for burn scar inference')
+    parser.add_argument('--region', type=str, default='north_america',
+                        help='FIRMS region (default: north_america)')
+    parser.add_argument('--days-back', type=int, default=3,
+                        help='Days back for FIRMS query (default: 3)')
+    parser.add_argument('--no-firms', action='store_true',
+                        help='Use hardcoded event instead of FIRMS')
+    parser.add_argument('--resolution', type=int, default=60,
+                        help='Sentinel pixel resolution (default: 60)')
+    args = parser.parse_args()
+
     token = fetch_token()
     assert token is not None, "Failed to fetch Sentinel token"
-    assert os.getenv(ENV_ACCESS_TOKEN), "Missing cached access token in environment"
+    assert os.getenv(ENV_ACCESS_TOKEN), "Missing cached access token"
 
-    if use_firms:
-        print(f"Fetching fire events from FIRMS ({region}, last {days_back} days)...")
-        events = fetch_and_process(region=region, days_back=days_back)
+    if not args.no_firms:
+        print(f"Fetching fire events from FIRMS ({args.region}, last {args.days_back} days)...")
+        events = fetch_and_process(region=args.region, days_back=args.days_back)
         print(f"Found {len(events)} qualified events")
 
         if not events:
@@ -35,26 +54,26 @@ def main(use_firms: bool = True, region: str = "north_america", days_back: int =
             "total_frp_mw": np.float64(10373.33),
             "start_date": "2026-04-11",
             "end_date": "2026-04-11",
-            "bbox": [
-                np.float64(103.38314000000001),
-                np.float64(19.23771),
-                np.float64(104.0),
-                np.float64(20.0),
-            ],
+            "bbox": [103.38314, 19.23771, 104.0, 20.0],
             "centroid_lat": np.float64(19.88453790804597),
             "centroid_lon": np.float64(103.8635648275862),
         }
-        print("Using hardcoded event (disabled FIRMS)")
+        print("Using hardcoded event")
 
-    result = process_fire_event(event, resolution=60)
-    print("Result keys:", result.keys())
-    print("Pre-bands shape:", result["pre_bands"].shape)
-    print("Post-bands shape:", result["post_bands"].shape)
-    print("dNBR shape:", result["dnbr"].shape)
-    print("Tensor shape:", result["tensor"].shape)
+    result = process_fire_event(event, resolution=args.resolution, use_model=args.use_model)
+    print("\nResults:")
+    print(f"  Pre-fire bands: {result['pre_bands'].shape}")
+    print(f"  Post-fire bands: {result['post_bands'].shape}")
+    print(f"  dNBR: {result['dnbr'].shape}")
 
-    plot_event_result(result, output_path="firms_dnbr.png")
+    if args.use_model and result.get('burn_scar_probs') is not None:
+        probs = result['burn_scar_probs']
+        print(f"  Burn scar probs: min={probs.min():.3f}, max={probs.max():.3f}")
+        print(f"  Mask saved to: {result.get('burn_scar_mask_path', 'N/A')}")
+
+    plot_event_result(result, output_path="burn_scar_result.png")
+    print("\nPlot saved to burn_scar_result.png")
 
 
 if __name__ == "__main__":
-    main(use_firms=True, region="north_america", days_back=3)
+    main()

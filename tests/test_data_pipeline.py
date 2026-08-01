@@ -103,9 +103,10 @@ class TestImageUtils(unittest.TestCase):
         self.assertAlmostEqual(sub_bboxes[-1].max_y, 10.0)
 
     def test_stitch_tiles_concatenates_row_major_tiles(self):
-        tile_1 = np.full((2, 2, 1), 1, dtype=np.uint8)
-        tile_2 = np.full((2, 1, 1), 2, dtype=np.uint8)
-        tile_3 = np.full((1, 2, 1), 3, dtype=np.uint8)
+        """Test stitching tiles in (C, H, W) format, 2x2 grid."""
+        tile_1 = np.full((1, 2, 2), 1, dtype=np.uint8)
+        tile_2 = np.full((1, 2, 1), 2, dtype=np.uint8)
+        tile_3 = np.full((1, 1, 2), 3, dtype=np.uint8)
         tile_4 = np.full((1, 1, 1), 4, dtype=np.uint8)
 
         stitched = stitch_tiles(
@@ -114,14 +115,81 @@ class TestImageUtils(unittest.TestCase):
             n_cols=2,
         )
 
-        expected = np.array(
-            [
-                [[1], [1], [2]],
-                [[1], [1], [2]],
-                [[3], [3], [4]],
-            ],
-            dtype=np.uint8,
+        expected = np.full((1, 3, 3), 0, dtype=np.uint8)
+        expected[0, 0:2, 0:2] = 1
+        expected[0, 0:2, 2] = 2
+        expected[0, 2, 0:2] = 3
+        expected[0, 2, 2] = 4
+        self.assertTrue(np.array_equal(stitched, expected))
+
+    def test_stitch_tiles_multiband_tiles(self):
+        """Test stitching tiles with multiple bands (C, H, W format)."""
+        bands = 7
+        tile_1 = np.full((bands, 2, 2), 1, dtype=np.uint8)
+        tile_2 = np.full((bands, 2, 1), 2, dtype=np.uint8)
+        tile_3 = np.full((bands, 1, 2), 3, dtype=np.uint8)
+        tile_4 = np.full((bands, 1, 1), 4, dtype=np.uint8)
+
+        stitched = stitch_tiles(
+            [tile_1, tile_2, tile_3, tile_4],
+            n_rows=2,
+            n_cols=2,
         )
+
+        self.assertEqual(stitched.shape, (bands, 3, 3))
+        self.assertTrue(np.all(stitched[:, 0:2, 0:2] == 1))
+        self.assertTrue(np.all(stitched[:, 0:2, 2] == 2))
+        self.assertTrue(np.all(stitched[:, 2, 0:2] == 3))
+        self.assertTrue(np.all(stitched[:, 2, 2] == 4))
+
+    def test_stitch_tiles_single_tile(self):
+        """Test stitching a single 1x1 grid."""
+        tile = np.full((3, 4, 5), 42, dtype=np.uint8)
+
+        stitched = stitch_tiles([tile], n_rows=1, n_cols=1)
+
+        self.assertTrue(np.array_equal(stitched, tile))
+
+    def test_stitch_tiles_single_row_multi_column(self):
+        """Test stitching tiles in a single row (1x3 grid)."""
+        tile_1 = np.full((2, 2, 3), 1, dtype=np.uint8)
+        tile_2 = np.full((2, 2, 3), 2, dtype=np.uint8)
+        tile_3 = np.full((2, 2, 3), 3, dtype=np.uint8)
+
+        stitched = stitch_tiles([tile_1, tile_2, tile_3], n_rows=1, n_cols=3)
+
+        expected = np.concatenate([tile_1, tile_2, tile_3], axis=2)
+        self.assertTrue(np.array_equal(stitched, expected))
+
+    def test_stitch_tiles_single_column_multi_row(self):
+        """Test stitching tiles in a single column (3x1 grid)."""
+        tile_1 = np.full((2, 3, 2), 1, dtype=np.uint8)
+        tile_2 = np.full((2, 3, 2), 2, dtype=np.uint8)
+        tile_3 = np.full((2, 3, 2), 3, dtype=np.uint8)
+
+        stitched = stitch_tiles([tile_1, tile_2, tile_3], n_rows=3, n_cols=1)
+
+        expected = np.concatenate([tile_1, tile_2, tile_3], axis=1)
+        self.assertTrue(np.array_equal(stitched, expected))
+
+    def test_stitch_tiles_nested_list_format(self):
+        """Test branch 2: nested list of rows (list of lists)."""
+        row_1 = [
+            np.full((1, 2, 2), 1, dtype=np.uint8),
+            np.full((1, 2, 1), 2, dtype=np.uint8),
+        ]
+        row_2 = [
+            np.full((1, 1, 2), 3, dtype=np.uint8),
+            np.full((1, 1, 1), 4, dtype=np.uint8),
+        ]
+
+        stitched = stitch_tiles([row_1, row_2])
+
+        expected = np.full((1, 3, 3), 0, dtype=np.uint8)
+        expected[0, 0:2, 0:2] = 1
+        expected[0, 0:2, 2] = 2
+        expected[0, 2, 0:2] = 3
+        expected[0, 2, 2] = 4
         self.assertTrue(np.array_equal(stitched, expected))
 
     def test_save_geotiff_round_trips_data(self):

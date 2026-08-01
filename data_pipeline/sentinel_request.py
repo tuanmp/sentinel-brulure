@@ -188,26 +188,43 @@ def fetch_large_bbox(
     split_result=None,
 ):
     if split_result is None:
-        flat_bboxes, n_rows, n_cols = compute_split_bboxes(bbox, resolution)
+        bboxes, n_rows, n_cols = compute_split_bboxes(bbox, resolution)
     else:
-        flat_bboxes, n_rows, n_cols = split_result
+        bboxes, n_rows, n_cols = split_result
 
     sub_images = []
     size = None
-    for i in range(n_rows):
-        this_row = []
-        for j in range(n_cols):
-            sub_bbox = flat_bboxes[i * n_cols + j]
+
+    print(bboxes)
+    for col in bboxes:
+        this_col = []
+        for sub_bbox in col:
             if size is None:
                 w, h = bbox_to_dimensions(sub_bbox, resolution=resolution)
                 size = (h, w)
                 logging.info(f"Sub-tile pixel size: {size}")
-            logging.info(f"  Fetching sub-tile ({i+1}, {j+1})/{(n_rows, n_cols)}...")
+            logging.info(f"  Fetching sub-tile with bbox: {sub_bbox}...")
             bands = fetch_bands(time_interval, bbox=sub_bbox, height=size[0], width=size[1])
-            this_row.append(bands)
-        sub_images.append(this_row)
+            print(bands.shape)
+            this_col.append(bands)
+        sub_images.append(this_col)
 
-    stitched = stitch_tiles(sub_images, n_rows=n_rows, n_cols=n_cols)
+    # for i in range(n_rows):
+    #     this_row = []
+    #     for j in range(n_cols):
+    #         sub_bbox = bboxes[i * n_cols + j]
+    #         if size is None:
+    #             w, h = bbox_to_dimensions(sub_bbox, resolution=resolution)
+    #             size = (h, w)
+    #             logging.info(f"Sub-tile pixel size: {size}")
+    #         logging.info(f"  Fetching sub-tile ({i+1}, {j+1})/{(n_rows, n_cols)}...")
+    #         bands = fetch_bands(time_interval, bbox=sub_bbox, height=size[0], width=size[1])
+    #         print(bands.shape)
+    #         this_row.append(bands)
+    #     sub_images.append(this_row)
+
+    logging.info(f"Stitching {len(sub_images)} rows and {len(sub_images[0])} columns of sub-tiles...")
+    stitched = stitch_tiles(sub_images)
     return stitched
 
 
@@ -236,12 +253,38 @@ def fetch_bands(time_interval, bbox, height, width, evalscript=evalscript):
     logging.info("Fetched bands with shape: %s", bands.shape)
     return bands
 
+def search_sentinel_data(bbox, time_interval):
+    query = {
+        "bbox": f"{bbox.min_x},{bbox.min_y},{bbox.max_x},{bbox.max_y}",
+        "datetime": f"{time_interval[0]}T00:00:00Z/{time_interval[1]}T00:00:00Z",
+        "collections": "sentinel-2-l2a",
+        "limit": 1,
+    }
 
-def process_fire_event(event, resolution=RESOLUTION):
+    token = _token_from_env()
+    if token is None or time.time() > token.get("expires_at", 0) - SAFE_MARGIN:
+        logging.warning("Token is expired or about to expire, fetching a new one...")
+        token = fetch_token()
+
+    url = "https://sh.dataspace.copernicus.eu/catalog/v1/search"
+    response = requests.get(url, params=query, headers={"Authorization": f"Bearer {token['access_token']}"})
+
+    if response.status_code != 200:
+        logging.error(f"Search request failed with status code {response.status_code}: {response.text}")
+        return None
+
+    json_response = response.json()
+
+    return json_response.get("features", [])
+
+def process_fire_event(event, resolution=RESOLUTION, use_model=False):
     bbox = BBox(event["bbox"], crs=CRS.WGS84)
 
     fire_start = datetime.strptime(event["start_date"], "%Y-%m-%d")
     fire_end = datetime.strptime(event["end_date"], "%Y-%m-%d")
+
+    # subtract 1 day from fire_end
+    fire_end -= timedelta(days=3)
 
     pre_window = (
         (fire_start - timedelta(days=15)).strftime("%Y-%m-%d"),
@@ -258,6 +301,21 @@ def process_fire_event(event, resolution=RESOLUTION):
     logging.info(f"  BBox: {event['bbox']}")
 
     pre_bands = fetch_bbox(pre_window, bbox, resolution=resolution)
+
+    logging.info("Searching for Sentinel data in post-fire window...")
+    search_features = []
+
+    while (not search_features) and fire_end > fire_start:
+        search_features = search_sentinel_data(bbox, post_window)
+        if search_features:
+            break
+        fire_end -= timedelta(days=1)
+        post_window = (
+            fire_end.strftime("%Y-%m-%d"),
+            (fire_end + timedelta(days=1)).strftime("%Y-%m-%d"),
+        )
+        logging.warning(f"No data found for post-fire window. Retrying with an earlier window: {post_window}")
+
     post_bands = fetch_bbox(post_window, bbox, resolution=resolution)
 
     nbr_pre = compute_nbr(pre_bands)
@@ -269,13 +327,54 @@ def process_fire_event(event, resolution=RESOLUTION):
         axis=0,
     )
 
-    return {
+    result = {
         "event": event,
         "pre_bands": pre_bands,
         "post_bands": post_bands,
         "dnbr": dnbr,
         "tensor": post_8ch,
     }
+
+    if use_model:
+        try:
+            import rasterio
+            from rasterio.transform import from_bounds
+
+            from .model_inference import run_inference, save_mask
+
+            # Save post_bands as temporary GeoTIFF for model inference
+            temp_geotiff = f"/tmp/post_fire_{event['cluster_id']}.tif"
+            height, width = post_bands.shape[1], post_bands.shape[2]
+
+            with rasterio.open(
+                temp_geotiff, 'w',
+                driver='GTiff',
+                height=height, width=width,
+                count=6,
+                dtype=post_bands.dtype,
+                crs='EPSG:4326',
+                transform=from_bounds(*event['bbox'], width=width, height=height),
+            ) as dst:
+                dst.write(post_bands[:6])
+
+            # Run model inference
+            logging.info("Running Prithvi burn scar model...")
+            burn_scar_probs = run_inference(temp_geotiff)
+
+            # Save burn scar mask
+            output_mask = f"burn_scar_mask_{event['cluster_id']}.tif"
+            save_mask(burn_scar_probs, output_mask, temp_geotiff)
+            logging.info(f"Burn scar mask saved to: {output_mask}")
+
+            result["burn_scar_probs"] = burn_scar_probs
+            result["burn_scar_mask_path"] = output_mask
+
+        except Exception as e:
+            logging.error(f"Model inference failed: {e}")
+            result["burn_scar_probs"] = None
+            result["burn_scar_mask_path"] = None
+
+    return result
 
 
 def plot_event_result(result, output_path="rhodes_dnbr_lowres.png"):
