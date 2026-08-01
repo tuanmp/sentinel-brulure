@@ -36,9 +36,11 @@ def test_fetch_fire_events_unknown_region_raises(mock_getenv):
 
 
 def test_fetch_and_process_tags_country_on_events():
-    with patch("data_pipeline.firm_request.fetch_fire_events") as mock_fetch, \
-         patch("data_pipeline.firm_request.cluster_detections") as mock_cluster, \
-         patch("data_pipeline.firm_request.filter_events") as mock_filter:
+    with (
+        patch("data_pipeline.firm_request.fetch_fire_events") as mock_fetch,
+        patch("data_pipeline.firm_request.cluster_detections") as mock_cluster,
+        patch("data_pipeline.firm_request.filter_events") as mock_filter,
+    ):
         mock_fetch.return_value = Mock()
         mock_cluster.return_value = [{"cluster_id": 1}]
         mock_filter.return_value = [{"cluster_id": 1}]

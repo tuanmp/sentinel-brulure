@@ -19,7 +19,13 @@ from data_pipeline.image_utils import (
 from data_pipeline.sentinel_request import fetch_token, make_json, make_request
 from data_pipeline.sentinel_utils import compute_nbr
 
-test_limits= [np.float64(100.92801), np.float64(17.90662), np.float64(102.77297999999999), np.float64(19.49714)]
+test_limits = [
+    np.float64(100.92801),
+    np.float64(17.90662),
+    np.float64(102.77297999999999),
+    np.float64(19.49714),
+]
+
 
 def _make_tiff_bytes(array: np.ndarray) -> bytes:
     height, width = array.shape[1:3]
@@ -295,6 +301,7 @@ class TestSentinelFetchToken(unittest.TestCase):
             include_client_id=True,
         )
 
+
 class TestSentinelMakeRequest(unittest.TestCase):
     @patch("data_pipeline.sentinel_request.os.getenv", return_value=None)
     def test_make_request_without_cached_token_raises_exception(self, _mock_getenv):
@@ -349,6 +356,7 @@ class TestSentinelMakeRequest(unittest.TestCase):
             },
             json={"hello": "world"},
         )
+
 
 if __name__ == "__main__":
     unittest.main()

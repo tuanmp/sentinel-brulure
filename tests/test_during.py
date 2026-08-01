@@ -9,35 +9,44 @@ from analytics.event import FireEvent
 
 def _event():
     return FireEvent(
-        event_id="e1", country="spain",
+        event_id="e1",
+        country="spain",
         bbox=[-1.3, 38.9, -0.6, 39.5],
-        centroid_lat=39.2, centroid_lon=-0.95,
-        start_date="2026-07-15", end_date="2026-07-16",
+        centroid_lat=39.2,
+        centroid_lon=-0.95,
+        start_date="2026-07-15",
+        end_date="2026-07-16",
     )
 
 
 def _df():
-    return pd.DataFrame({
-        "latitude": [39.1, 39.2, 39.0, 42.0],
-        "longitude": [-1.0, -0.9, -1.1, -3.0],
-        "frp": [100.0, 200.0, 50.0, 999.0],
-        "acq_date": ["2026-07-15", "2026-07-15", "2026-07-16", "2026-07-15"],
-        "confidence": ["h", "n", "l", "h"],
-    })
+    return pd.DataFrame(
+        {
+            "latitude": [39.1, 39.2, 39.0, 42.0],
+            "longitude": [-1.0, -0.9, -1.1, -3.0],
+            "frp": [100.0, 200.0, 50.0, 999.0],
+            "acq_date": ["2026-07-15", "2026-07-15", "2026-07-16", "2026-07-15"],
+            "confidence": ["h", "n", "l", "h"],
+        }
+    )
 
 
 def _empty_df():
-    return pd.DataFrame(columns=["latitude", "longitude", "frp", "acq_date", "confidence"])
+    return pd.DataFrame(
+        columns=["latitude", "longitude", "frp", "acq_date", "confidence"]
+    )
 
 
 def _outside_bbox_df():
-    return pd.DataFrame({
-        "latitude": [42.0, 45.0],
-        "longitude": [-3.0, 2.0],
-        "frp": [999.0, 500.0],
-        "acq_date": ["2026-07-15", "2026-07-15"],
-        "confidence": ["h", "h"],
-    })
+    return pd.DataFrame(
+        {
+            "latitude": [42.0, 45.0],
+            "longitude": [-3.0, 2.0],
+            "frp": [999.0, 500.0],
+            "acq_date": ["2026-07-15", "2026-07-15"],
+            "confidence": ["h", "h"],
+        }
+    )
 
 
 def test_fetch_daily_observations_groups_and_filters():

@@ -12,7 +12,9 @@ from analytics.store import EventStore
 
 def main():
     parser = argparse.ArgumentParser(description="Build reports for all tracked events")
-    parser.add_argument("--root", default=None, help="Event store root (default: reports/events)")
+    parser.add_argument(
+        "--root", default=None, help="Event store root (default: reports/events)"
+    )
     parser.add_argument("--out", default=None, help="Output dir (default: reports/)")
     args = parser.parse_args()
 

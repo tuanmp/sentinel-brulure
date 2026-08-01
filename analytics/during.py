@@ -13,16 +13,20 @@ def fetch_daily_observations(event, days_back: int = 10) -> list[dict]:
     df = fetch_fire_events(region=event.country, days_back=days_back)
     min_lon, min_lat, max_lon, max_lat = event.bbox
     in_bbox = df[
-        (df["longitude"] >= min_lon) & (df["longitude"] <= max_lon)
-        & (df["latitude"] >= min_lat) & (df["latitude"] <= max_lat)
+        (df["longitude"] >= min_lon)
+        & (df["longitude"] <= max_lon)
+        & (df["latitude"] >= min_lat)
+        & (df["latitude"] <= max_lat)
     ]
 
     rows = []
     for date, group in in_bbox.groupby("acq_date"):
-        rows.append({
-            "date": str(date),
-            "frp_mw": float(group["frp"].sum()),
-            "detection_count": int(len(group)),
-            "bbox_growth_deg": _bbox_span(group),
-        })
+        rows.append(
+            {
+                "date": str(date),
+                "frp_mw": float(group["frp"].sum()),
+                "detection_count": int(len(group)),
+                "bbox_growth_deg": _bbox_span(group),
+            }
+        )
     return sorted(rows, key=lambda row: row["date"])
