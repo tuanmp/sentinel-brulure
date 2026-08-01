@@ -12,8 +12,6 @@ VALID_TRANSITIONS = {
     "recovering": {"complete"},
 }
 
-VALID_STATUSES = set(VALID_TRANSITIONS) | {"complete"}
-
 
 @dataclass
 class FireEvent:
@@ -38,7 +36,7 @@ class FireEvent:
 
     @classmethod
     def from_dict(cls, data: dict) -> "FireEvent":
-        return cls(**dict(data))
+        return cls(**data)
 
     def transition(self, new_status: str) -> None:
         allowed = VALID_TRANSITIONS.get(self.status, set())

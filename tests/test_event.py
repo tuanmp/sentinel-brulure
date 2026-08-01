@@ -34,9 +34,15 @@ def test_invalid_transition_raises():
         event.transition("complete")
 
 
+def test_transition_from_complete_raises():
+    event = _event()
+    for target in ["active", "ended", "recovering", "complete"]:
+        event.transition(target)
+    with pytest.raises(InvalidTransitionError):
+        event.transition("active")
+
+
 def test_to_dict_from_dict_round_trip():
     event = _event()
     restored = FireEvent.from_dict(event.to_dict())
-    assert restored.event_id == "evt-1"
-    assert restored.bbox == [4.2, 44.3, 4.8, 44.8]
-    assert restored.during_observations == []
+    assert restored == event
