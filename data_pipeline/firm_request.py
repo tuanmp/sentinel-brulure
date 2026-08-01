@@ -1,7 +1,7 @@
 import io
 import logging
 import os
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 
 import numpy as np
@@ -315,6 +315,98 @@ def fetch_and_process(
     """
     df = fetch_fire_events(
         region=region, days_back=days_back, min_confidence=min_confidence
+    )
+    events = cluster_detections(df)
+    events = filter_events(events)
+    if country:
+        for event in events:
+            event["country"] = country
+    return events
+
+
+def _chunk_dates(
+    start_date: date, end_date: date, span: int = MAX_DAYS_BACK
+) -> list[tuple[date, date]]:
+    """Split [start_date, end_date] into inclusive windows of at most `span` days."""
+    if start_date > end_date:
+        return []
+    chunks = []
+    current = start_date
+    while current <= end_date:
+        chunk_end = min(current + timedelta(days=span - 1), end_date)
+        chunks.append((current, chunk_end))
+        current = chunk_end + timedelta(days=1)
+    return chunks
+
+
+def fetch_fire_events_range(
+    region: str,
+    start_date: str,
+    end_date: str,
+    source: str = "VIIRS_SNPP_NRT",
+    min_confidence: str = DEFAULT_MIN_CONFIDENCE,
+) -> pd.DataFrame:
+    """
+    Fetch fire detections across an arbitrary date window by paging FIRMS in
+    5-day chunks. Older windows fall back to the matching *_SP archive via
+    pick_source().
+
+    Args:
+        region: One of REGIONS/COUNTRY_REGIONS keys or "world"
+        start_date: Inclusive window start (YYYY-MM-DD)
+        end_date: Inclusive window end (YYYY-MM-DD)
+        source: Preferred FIRMS source (NRT)
+        min_confidence: "low", "nominal", or "high"
+
+    Returns:
+        Concatenated DataFrame with detections across the whole window
+    """
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+
+    frames = []
+    for window_start, window_end in _chunk_dates(start, end):
+        days = (window_end - window_start).days + 1
+        src = pick_source(window_start, window_end, source)
+        df = fetch_fire_events(
+            region=region,
+            days_back=days,
+            date=window_start.isoformat(),
+            source=src,
+            min_confidence=min_confidence,
+        )
+        frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def fetch_and_process_range(
+    region: str,
+    start_date: str,
+    end_date: str,
+    min_confidence: str = DEFAULT_MIN_CONFIDENCE,
+    country: str | None = None,
+) -> list[dict]:
+    """
+    Full pipeline over an arbitrary date window: range fetch, cluster, filter.
+
+    Args:
+        region: Regional filter (REGIONS/COUNTRY_REGIONS key or "world")
+        start_date: Inclusive window start (YYYY-MM-DD)
+        end_date: Inclusive window end (YYYY-MM-DD)
+        min_confidence: Minimum confidence level
+        country: Optional country tag added to each returned event
+
+    Returns:
+        List of fire event dicts compatible with sentinel_request.process_fire_event()
+    """
+    df = fetch_fire_events_range(
+        region=region,
+        start_date=start_date,
+        end_date=end_date,
+        min_confidence=min_confidence,
     )
     events = cluster_detections(df)
     events = filter_events(events)

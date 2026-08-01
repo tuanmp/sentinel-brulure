@@ -1,4 +1,5 @@
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,7 +9,11 @@ import argparse
 
 from analytics.event import FireEvent
 from analytics.store import EventStore
-from data_pipeline.firm_request import COUNTRY_REGIONS, fetch_and_process
+from data_pipeline.firm_request import (
+    COUNTRY_REGIONS,
+    DEFAULT_DAYS_BACK,
+    fetch_and_process_range,
+)
 
 COUNTRIES = list(COUNTRY_REGIONS.keys())
 
@@ -26,10 +31,25 @@ def _build_event(spec: dict) -> FireEvent:
     )
 
 
-def fetch_real_events(country: str, days_back: int, limit: int) -> list[dict]:
-    """Fetch and cluster real FIRMS fire events for a country, best first."""
-    events = fetch_and_process(
-        region=country, days_back=days_back, country=country
+def _window_dates(since: str | None, window_days: int, today: date) -> tuple[str, str]:
+    """Return (start, end) inclusive dates for the seeding window."""
+    if since is not None:
+        start = date.fromisoformat(since)
+    else:
+        start = today - timedelta(days=window_days - 1)
+    end = start + timedelta(days=window_days - 1)
+    return start.isoformat(), end.isoformat()
+
+
+def fetch_real_events(
+    country: str, start_date: str, end_date: str, limit: int
+) -> list[dict]:
+    """Fetch and cluster real FIRMS fire events for a country over a window."""
+    events = fetch_and_process_range(
+        region=country,
+        start_date=start_date,
+        end_date=end_date,
+        country=country,
     )
     return events[:limit]
 
@@ -42,10 +62,18 @@ def main():
         "--root", default=None, help="Event store root (default: reports/events)"
     )
     parser.add_argument(
-        "--days-back",
+        "--since",
+        default=None,
+        help=(
+            "Window start (YYYY-MM-DD). Default: today - window-days + 1. "
+            "Windows older than ~3 months use FIRMS *_SP archives."
+        ),
+    )
+    parser.add_argument(
+        "--window-days",
         type=int,
-        default=5,
-        help="Days of FIRMS history to seed from (max 5)",
+        default=DEFAULT_DAYS_BACK,
+        help="Window size in days (internally paged in 5-day chunks)",
     )
     parser.add_argument(
         "--per-country",
@@ -66,8 +94,16 @@ def main():
     )
     args = parser.parse_args()
 
-    if not (1 <= args.days_back <= 5):
-        parser.error("days-back must be between 1 and 5 (FIRMS limit)")
+    if args.window_days < 1:
+        parser.error("window-days must be at least 1")
+    if args.since is not None:
+        try:
+            date.fromisoformat(args.since)
+        except ValueError:
+            parser.error("since must be a valid date (YYYY-MM-DD)")
+
+    start_date, end_date = _window_dates(args.since, args.window_days, date.today())
+    print(f"Seeding window: {start_date} .. {end_date}")
 
     store = EventStore(args.root)
     if args.replace:
@@ -77,9 +113,9 @@ def main():
     countries = args.country or COUNTRIES
     total = 0
     for country in countries:
-        print(f"Fetching real fires for {country} (last {args.days_back} days)...")
+        print(f"Fetching real fires for {country} ({start_date}..{end_date})...")
         try:
-            events = fetch_real_events(country, args.days_back, args.per_country)
+            events = fetch_real_events(country, start_date, end_date, args.per_country)
         except Exception as exc:
             print(f"  SKIP {country}: {exc}")
             continue
