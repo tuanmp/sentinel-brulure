@@ -41,6 +41,24 @@ def test_export_csv_empty():
     assert report.export_csv([]) == ""
 
 
+def test_frp_chart_returns_base64_png():
+    import base64
+
+    chart = report._frp_chart(_event())
+    decoded = base64.b64decode(chart)
+    assert decoded.startswith(b"\x89PNG")
+
+
+def test_frp_chart_empty_observations_returns_png():
+    import base64
+
+    event = _event()
+    event.during_observations = []
+    chart = report._frp_chart(event)
+    decoded = base64.b64decode(chart)
+    assert decoded.startswith(b"\x89PNG")
+
+
 def test_build_html_report_writes_file(tmp_path, monkeypatch):
     monkeypatch.setattr(report, "_frp_chart", lambda event: "CHART_DATA")
     out = tmp_path / "e1.html"
