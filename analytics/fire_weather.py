@@ -33,9 +33,12 @@ def fetch_fire_weather(
         ),
         "timezone": "UTC",
     }
-    response = requests.get(ARCHIVE_URL, params=params)
+    response = requests.get(ARCHIVE_URL, params=params, timeout=30)
     response.raise_for_status()
-    daily = response.json()["daily"]
+    data = response.json()
+    if data.get("error"):
+        raise ValueError(data.get("reason", "Open-Meteo API error"))
+    daily = data["daily"]
 
     rows = []
     for i, date in enumerate(daily["time"]):
