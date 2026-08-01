@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch
 
 import numpy as np
@@ -56,3 +57,20 @@ def test_analyze_recovery_no_baseline():
     with patch("analytics.recovery.fetch_bbox", return_value=_bands()):
         sample = recovery.analyze_recovery(event, 1, resolution=60)
     assert sample["regrowth_ratio"] is None
+
+
+def test_recovery_due_at_boundary():
+    event = _event()
+    assert recovery.recovery_due(event, 1, date(2026, 7, 29)) is True
+
+
+def test_recovery_due_not_yet():
+    event = _event()
+    assert recovery.recovery_due(event, 1, date(2026, 7, 28)) is False
+
+
+def test_recovery_due_later_offset():
+    event = _event()
+    assert recovery.recovery_due(event, 12, date(2027, 6, 23)) is False
+    assert recovery.recovery_due(event, 12, date(2027, 6, 24)) is True
+    assert recovery.recovery_due(event, 12, date(2027, 6, 25)) is True
