@@ -42,6 +42,33 @@ def test_transition_from_complete_raises():
         event.transition("active")
 
 
+def test_reactivation_transitions_allowed():
+    event = _event()
+    event.transition("active")
+    event.transition("ended")
+    event.transition("active")
+    assert event.status == "active"
+    event.transition("ended")
+    event.transition("recovering")
+    event.transition("active")
+    assert event.status == "active"
+
+
+def test_complete_still_terminal_after_reactivation():
+    event = _event()
+    for target in [
+        "active",
+        "ended",
+        "recovering",
+        "active",
+        "ended",
+        "recovering",
+        "complete",
+    ]:
+        event.transition(target)
+    assert event.status == "complete"
+
+
 def test_to_dict_from_dict_round_trip():
     event = _event()
     restored = FireEvent.from_dict(event.to_dict())

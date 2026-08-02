@@ -93,3 +93,17 @@ def test_analyze_postfire_passes_event_dict_and_resolution():
         "end_date": "2026-07-16",
     }
     assert mock_process.call_args.kwargs == {"resolution": 60, "use_model": False}
+
+
+def test_analyze_postfire_skips_when_no_sentinel_coverage():
+    with (
+        patch("analytics.postfire.has_imagery", return_value=False) as mock_coverage,
+        patch("analytics.postfire.process_fire_event") as mock_process,
+    ):
+        assessment = postfire.analyze_postfire(_event(), resolution=60)
+
+    assert assessment["available"] is False
+    assert assessment["skipped_reason"] == "no_sentinel_data"
+    mock_process.assert_not_called()
+    window = mock_coverage.call_args.args[1]
+    assert window[0] == "2026-07-10"

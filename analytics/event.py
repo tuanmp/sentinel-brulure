@@ -8,8 +8,8 @@ class InvalidTransitionError(Exception):
 VALID_TRANSITIONS = {
     "detected": {"active"},
     "active": {"ended"},
-    "ended": {"recovering"},
-    "recovering": {"complete"},
+    "ended": {"active", "recovering"},
+    "recovering": {"active", "complete"},
 }
 
 

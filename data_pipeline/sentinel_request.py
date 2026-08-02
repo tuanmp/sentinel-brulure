@@ -66,8 +66,12 @@ function evaluatePixel(sample) {
 
 
 def fetch_token():
-    assert os.getenv("sentinel_client_id") is not None, "Missing Sentinel API client ID in environment variables"
-    assert os.getenv("sentinel_client_secret") is not None, "Missing Sentinel API client secret in environment variables"
+    assert os.getenv("sentinel_client_id") is not None, (
+        "Missing Sentinel API client ID in environment variables"
+    )
+    assert os.getenv("sentinel_client_secret") is not None, (
+        "Missing Sentinel API client secret in environment variables"
+    )
     client = BackendApplicationClient(client_id=os.getenv("sentinel_client_id"))
     oauth = OAuth2Session(client=client)
 
@@ -204,7 +208,9 @@ def fetch_large_bbox(
                 size = (h, w)
                 logging.info(f"Sub-tile pixel size: {size}")
             logging.info(f"  Fetching sub-tile with bbox: {sub_bbox}...")
-            bands = fetch_bands(time_interval, bbox=sub_bbox, height=size[0], width=size[1])
+            bands = fetch_bands(
+                time_interval, bbox=sub_bbox, height=size[0], width=size[1]
+            )
             print(bands.shape)
             this_col.append(bands)
         sub_images.append(this_col)
@@ -223,7 +229,9 @@ def fetch_large_bbox(
     #         this_row.append(bands)
     #     sub_images.append(this_row)
 
-    logging.info(f"Stitching {len(sub_images)} rows and {len(sub_images[0])} columns of sub-tiles...")
+    logging.info(
+        f"Stitching {len(sub_images)} rows and {len(sub_images[0])} columns of sub-tiles..."
+    )
     stitched = stitch_tiles(sub_images)
     return stitched
 
@@ -245,13 +253,16 @@ def fetch_bbox(time_interval, bbox, resolution=RESOLUTION):
 
 
 def fetch_bands(time_interval, bbox, height, width, evalscript=evalscript):
-    data = make_json(bbox, time_interval[0], time_interval[1], height, width, evalscript)
+    data = make_json(
+        bbox, time_interval[0], time_interval[1], height, width, evalscript
+    )
     response = make_request(data)
     bands = extract_bands_from_response(response)
     if bands is None:
         raise RuntimeError("Failed to fetch bands from Sentinel response")
     logging.info("Fetched bands with shape: %s", bands.shape)
     return bands
+
 
 def search_sentinel_data(bbox, time_interval):
     query = {
@@ -267,15 +278,44 @@ def search_sentinel_data(bbox, time_interval):
         token = fetch_token()
 
     url = "https://sh.dataspace.copernicus.eu/catalog/v1/search"
-    response = requests.get(url, params=query, headers={"Authorization": f"Bearer {token['access_token']}"})
+    response = requests.get(
+        url, params=query, headers={"Authorization": f"Bearer {token['access_token']}"}
+    )
 
     if response.status_code != 200:
-        logging.error(f"Search request failed with status code {response.status_code}: {response.text}")
+        logging.error(
+            f"Search request failed with status code {response.status_code}: {response.text}"
+        )
         return None
 
     json_response = response.json()
 
     return json_response.get("features", [])
+
+
+def has_imagery(bbox, time_interval):
+    """True if Sentinel-2 L2A scenes exist for the window.
+
+    Returns False only on a definitive empty result (HTTP 200, zero features).
+    Returns True optimistically when the catalog query itself errors (None), so
+    a transient outage lets the calling phase attempt and fail/retry naturally
+    instead of being permanently skipped.
+    """
+    features = search_sentinel_data(bbox, time_interval)
+    return True if features is None else bool(features)
+
+
+def compute_post_window(start_date: str, end_date: str) -> tuple[str, str]:
+    """Compute the post-fire imagery window, clamped to start strictly after
+    the fire start so short fires don't get a 'post' window that precedes them."""
+    fire_start = datetime.strptime(start_date, "%Y-%m-%d")
+    fire_end = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=3)
+    post_start = max(fire_start + timedelta(days=1), fire_end)
+    return (
+        post_start.strftime("%Y-%m-%d"),
+        (post_start + timedelta(days=15)).strftime("%Y-%m-%d"),
+    )
+
 
 def process_fire_event(event, resolution=RESOLUTION, use_model=False):
     bbox = BBox(event["bbox"], crs=CRS.WGS84)
@@ -290,10 +330,7 @@ def process_fire_event(event, resolution=RESOLUTION, use_model=False):
         (fire_start - timedelta(days=15)).strftime("%Y-%m-%d"),
         (fire_start - timedelta(days=1)).strftime("%Y-%m-%d"),
     )
-    post_window = (
-        fire_end.strftime("%Y-%m-%d"),
-        (fire_end + timedelta(days=15)).strftime("%Y-%m-%d"),
-    )
+    post_window = compute_post_window(event["start_date"], event["end_date"])
 
     logging.info(f"\nProcessing event #{event['cluster_id']}")
     logging.info(f"  Pre-fire window:  {pre_window}")
@@ -314,7 +351,9 @@ def process_fire_event(event, resolution=RESOLUTION, use_model=False):
             fire_end.strftime("%Y-%m-%d"),
             (fire_end + timedelta(days=1)).strftime("%Y-%m-%d"),
         )
-        logging.warning(f"No data found for post-fire window. Retrying with an earlier window: {post_window}")
+        logging.warning(
+            f"No data found for post-fire window. Retrying with an earlier window: {post_window}"
+        )
 
     post_bands = fetch_bbox(post_window, bbox, resolution=resolution)
 
@@ -347,13 +386,15 @@ def process_fire_event(event, resolution=RESOLUTION, use_model=False):
             height, width = post_bands.shape[1], post_bands.shape[2]
 
             with rasterio.open(
-                temp_geotiff, 'w',
-                driver='GTiff',
-                height=height, width=width,
+                temp_geotiff,
+                "w",
+                driver="GTiff",
+                height=height,
+                width=width,
                 count=6,
                 dtype=post_bands.dtype,
-                crs='EPSG:4326',
-                transform=from_bounds(*event['bbox'], width=width, height=height),
+                crs="EPSG:4326",
+                transform=from_bounds(*event["bbox"], width=width, height=height),
             ) as dst:
                 dst.write(post_bands[:6])
 

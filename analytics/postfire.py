@@ -1,8 +1,13 @@
 from datetime import UTC, datetime
 
 import numpy as np
+from sentinelhub import CRS, BBox
 
-from data_pipeline.sentinel_request import process_fire_event
+from data_pipeline.sentinel_request import (
+    compute_post_window,
+    has_imagery,
+    process_fire_event,
+)
 
 SEVERITY_CLASSES = [
     ("unburned", None, 0.1),
@@ -36,6 +41,14 @@ def estimate_burned_area(dnbr: np.ndarray, resolution: int = 60) -> float:
 
 
 def analyze_postfire(event, resolution: int = 60, use_model: bool = False) -> dict:
+    bbox = BBox(event.bbox, crs=CRS.WGS84)
+    post_window_end = compute_post_window(event.start_date, event.end_date)[1]
+    if not has_imagery(bbox, (event.start_date, post_window_end)):
+        return {
+            "available": False,
+            "skipped_reason": "no_sentinel_data",
+            "fetched_on": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
     event_dict = {
         "cluster_id": event.cluster_id,
         "bbox": event.bbox,

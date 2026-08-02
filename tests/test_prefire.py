@@ -52,6 +52,7 @@ def test_analyze_prefire():
     with (
         patch("analytics.prefire.fetch_bbox", return_value=_bands()) as mock_fetch,
         patch("analytics.prefire.fetch_fire_weather") as mock_weather,
+        patch("analytics.prefire.has_imagery", return_value=True),
     ):
         mock_weather.return_value = [
             {"date": "2026-06-27", "fire_danger_index": 40.0},
@@ -89,7 +90,57 @@ def test_analyze_prefire_weather_index_none_when_no_rows():
     with (
         patch("analytics.prefire.fetch_bbox", return_value=_bands()),
         patch("analytics.prefire.fetch_fire_weather", return_value=[]),
+        patch("analytics.prefire.has_imagery", return_value=True),
     ):
         metrics = prefire.analyze_prefire(event)
 
     assert metrics["weather_index"] is None
+
+
+def test_analyze_prefire_weather_failure_is_non_fatal():
+    event = FireEvent(
+        event_id="e1",
+        country="france",
+        bbox=[4.2, 44.3, 4.8, 44.8],
+        centroid_lat=44.55,
+        centroid_lon=4.5,
+        start_date="2026-07-12",
+        end_date="2026-07-18",
+    )
+    with (
+        patch("analytics.prefire.fetch_bbox", return_value=_bands()),
+        patch(
+            "analytics.prefire.fetch_fire_weather",
+            side_effect=RuntimeError("boom"),
+        ),
+        patch("analytics.prefire.has_imagery", return_value=True),
+    ):
+        metrics = prefire.analyze_prefire(event, resolution=60)
+
+    assert metrics["ndvi"] == 0.6
+    assert metrics["weather_index"] is None
+    assert metrics["weather_error"] == "boom"
+
+
+def test_analyze_prefire_skips_when_no_sentinel_coverage():
+    event = FireEvent(
+        event_id="e1",
+        country="france",
+        bbox=[4.2, 44.3, 4.8, 44.8],
+        centroid_lat=44.55,
+        centroid_lon=4.5,
+        start_date="2003-07-12",
+        end_date="2003-07-18",
+    )
+    with (
+        patch("analytics.prefire.has_imagery", return_value=False) as mock_coverage,
+        patch("analytics.prefire.fetch_bbox") as mock_fetch,
+        patch("analytics.prefire.fetch_fire_weather") as mock_weather,
+    ):
+        metrics = prefire.analyze_prefire(event)
+
+    assert metrics["available"] is False
+    assert metrics["skipped_reason"] == "no_sentinel_data"
+    mock_fetch.assert_not_called()
+    mock_weather.assert_not_called()
+    assert mock_coverage.call_args.args[1] == ("2003-06-27", "2003-07-11")

@@ -3,7 +3,12 @@ from datetime import UTC, date, datetime
 from .during import fetch_daily_observations
 from .postfire import analyze_postfire
 from .prefire import analyze_prefire
-from .recovery import RECOVERY_OFFSETS_MONTHS, analyze_recovery, recovery_due
+from .recovery import (
+    RECOVERY_OFFSETS_MONTHS,
+    analyze_recovery,
+    recovery_complete,
+    recovery_sample_due,
+)
 
 MAX_FAILURES = 10
 
@@ -50,24 +55,31 @@ def _dispatch(event, resolution, use_model, quiet_after, today):
         if event.quiet_days >= quiet_after:
             event.transition("ended")
     elif event.status == "ended":
-        event.postfire_assessment = analyze_postfire(
-            event, resolution=resolution, use_model=use_model
-        )
-        event.transition("recovering")
+        _refresh_during(event, today)
+        if event.quiet_days < quiet_after:
+            event.recovery_samples = []
+            event.transition("active")
+        else:
+            event.postfire_assessment = analyze_postfire(
+                event, resolution=resolution, use_model=use_model
+            )
+            event.transition("recovering")
     elif event.status == "recovering":
         _refresh_during(event, today)
-        sampled = {sample["offset_months"] for sample in event.recovery_samples}
+        if event.quiet_days < quiet_after:
+            event.recovery_samples = []
+            event.transition("active")
+            return
         due = [
             month
             for month in RECOVERY_OFFSETS_MONTHS
-            if month not in sampled and recovery_due(event, month, today)
+            if recovery_sample_due(event, month, today)
         ]
         for month in due:
             event.recovery_samples.append(
                 analyze_recovery(event, month, resolution=resolution)
             )
-        sampled = {sample["offset_months"] for sample in event.recovery_samples}
-        if RECOVERY_OFFSETS_MONTHS[-1] in sampled:
+        if recovery_complete(event):
             event.transition("complete")
 
 

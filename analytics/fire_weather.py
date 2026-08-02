@@ -95,8 +95,8 @@ def fetch_fire_weather(
         forecast = _get_daily(FORECAST_URL, common)
         if _has_soil(forecast.get("daily", {})):
             return _rows_from_daily(forecast["daily"])
-    except ValueError:
-        pass  # out of range or error body -> try archive
+    except (ValueError, requests.RequestException):
+        pass  # out of range, error body, or network failure -> try archive
 
     archive = _get_daily(
         ARCHIVE_URL,

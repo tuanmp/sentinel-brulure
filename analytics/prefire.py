@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 from sentinelhub import CRS, BBox
 
-from data_pipeline.sentinel_request import fetch_bbox
+from data_pipeline.sentinel_request import fetch_bbox, has_imagery
 
 from .fire_weather import fetch_fire_weather
 
@@ -47,19 +47,36 @@ def prefire_window(start_date: str) -> tuple[str, str]:
 def analyze_prefire(event, resolution: int = 60) -> dict:
     window = prefire_window(event.start_date)
     bbox = BBox(event.bbox, crs=CRS.WGS84)
+    if not has_imagery(bbox, window):
+        return {
+            "available": False,
+            "skipped_reason": "no_sentinel_data",
+            "window": list(window),
+            "fetched_on": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
     bands = fetch_bbox(window, bbox, resolution=resolution)
 
-    weather_rows = fetch_fire_weather(event.centroid_lat, event.centroid_lon, *window)
-    weather_index = None
-    if weather_rows:
-        weather_index = float(
-            np.mean([row["fire_danger_index"] for row in weather_rows])
+    weather_rows = None
+    try:
+        weather_rows = fetch_fire_weather(
+            event.centroid_lat, event.centroid_lon, *window
         )
+    except Exception as exc:
+        weather_index = None
+        weather_error = str(exc)
+    else:
+        weather_index = None
+        weather_error = None
+        if weather_rows:
+            weather_index = float(
+                np.mean([row["fire_danger_index"] for row in weather_rows])
+            )
 
     return {
         "ndvi": mean_metric(compute_ndvi(bands)),
         "ndwi": mean_metric(compute_ndwi(bands)),
         "weather_index": weather_index,
+        "weather_error": weather_error,
         "window": list(window),
         "fetched_on": datetime.now(UTC).isoformat(timespec="seconds"),
     }

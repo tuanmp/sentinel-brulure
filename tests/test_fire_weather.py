@@ -1,6 +1,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from analytics import fire_weather as fw
 
@@ -104,6 +105,33 @@ def test_fetch_falls_back_when_forecast_lacks_soil():
     assert len(rows) == 2
     assert rows[0]["soil_moisture"] is None
     assert mock_get.call_count == 2
+    assert mock_get.call_args_list[1].args[0] == fw.ARCHIVE_URL
+
+
+def test_fetch_falls_back_when_forecast_http_error():
+    archive_payload = _daily_payload(soil_moisture_0_to_10cm_mean=[None, None])
+    mock_archive = _mock_response(archive_payload)
+    with patch(
+        "analytics.fire_weather.requests.get",
+        side_effect=[requests.HTTPError("400 Bad Request"), mock_archive],
+    ) as mock_get:
+        rows = fw.fetch_fire_weather(44.5, 4.5, "2019-09-01", "2019-09-02")
+
+    assert len(rows) == 2
+    assert mock_get.call_count == 2
+    assert mock_get.call_args_list[1].args[0] == fw.ARCHIVE_URL
+
+
+def test_fetch_falls_back_when_forecast_network_error():
+    archive_payload = _daily_payload(soil_moisture_0_to_10cm_mean=[None, None])
+    mock_archive = _mock_response(archive_payload)
+    with patch(
+        "analytics.fire_weather.requests.get",
+        side_effect=[requests.ConnectionError("timeout"), mock_archive],
+    ) as mock_get:
+        rows = fw.fetch_fire_weather(44.5, 4.5, "2019-09-01", "2019-09-02")
+
+    assert len(rows) == 2
     assert mock_get.call_args_list[1].args[0] == fw.ARCHIVE_URL
 
 
