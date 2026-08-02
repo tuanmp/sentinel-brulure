@@ -1,7 +1,17 @@
+import importlib
+
+import dotenv
 import numpy as np
 from sentinelhub import CRS, BBox
 
 from data_pipeline import sentinel_request as sr
+
+
+def test_sentinel_request_loads_env_from_project_root(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: calls.append(a))
+    importlib.reload(sr)
+    assert calls == [()]
 
 
 def _make_event(bbox):

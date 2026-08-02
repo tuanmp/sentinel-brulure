@@ -7,7 +7,7 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 
-load_dotenv("../.env")
+load_dotenv()
 
 from matplotlib import pyplot as plt
 from oauthlib.oauth2 import BackendApplicationClient
