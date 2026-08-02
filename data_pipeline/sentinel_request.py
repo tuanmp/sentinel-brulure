@@ -143,7 +143,9 @@ def make_request(json_body: dict):
     return response
 
 
-def make_json(bbox, start, end, height, width, evalscript=evalscript):
+def make_json(
+    bbox, start, end, height, width, evalscript=evalscript, mosaicking="leastRecent"
+):
     input_field = {
         "bounds": {
             "bbox": [bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y],
@@ -158,7 +160,7 @@ def make_json(bbox, start, end, height, width, evalscript=evalscript):
                         "from": f"{start}T00:00:00Z",
                         "to": f"{end}T23:59:59Z",
                     },
-                    "mosaickingOrder": "leastRecent",
+                    "mosaickingOrder": mosaicking,
                 },
                 "type": "sentinel-2-l2a",
             }
@@ -236,13 +238,19 @@ def fetch_large_bbox(
     return stitched
 
 
-def fetch_bbox(time_interval, bbox, resolution=RESOLUTION):
+def fetch_bbox(time_interval, bbox, resolution=RESOLUTION, mosaicking="leastRecent"):
     split_result = compute_split_bboxes(bbox, resolution)
     sub_bboxes, n_rows, n_cols = split_result
 
     if n_rows == 1 and n_cols == 1:
         width, height = bbox_to_dimensions(bbox, resolution=resolution)
-        return fetch_bands(time_interval, bbox=bbox, height=height, width=width)
+        return fetch_bands(
+            time_interval,
+            bbox=bbox,
+            height=height,
+            width=width,
+            mosaicking=mosaicking,
+        )
 
     return fetch_large_bbox(
         bbox,
@@ -252,9 +260,17 @@ def fetch_bbox(time_interval, bbox, resolution=RESOLUTION):
     )
 
 
-def fetch_bands(time_interval, bbox, height, width, evalscript=evalscript):
+def fetch_bands(
+    time_interval, bbox, height, width, evalscript=evalscript, mosaicking="leastRecent"
+):
     data = make_json(
-        bbox, time_interval[0], time_interval[1], height, width, evalscript
+        bbox,
+        time_interval[0],
+        time_interval[1],
+        height,
+        width,
+        evalscript,
+        mosaicking,
     )
     response = make_request(data)
     bands = extract_bands_from_response(response)

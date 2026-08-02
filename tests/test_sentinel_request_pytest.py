@@ -37,7 +37,9 @@ def test_fetch_bbox_small_area_single_request_path(monkeypatch):
     def fake_compute_split_bboxes(_bbox, resolution=10):
         return [[BBox([0.0, 0.0, 0.1, 0.1], crs=CRS.WGS84)]], 1, 1
 
-    def fake_fetch_bands(time_interval, bbox, height, width, evalscript=sr.evalscript):
+    def fake_fetch_bands(
+        time_interval, bbox, height, width, evalscript=sr.evalscript, mosaicking="leastRecent"
+    ):
         call_counter["count"] += 1
         assert (height, width) == (4, 5)
         return _fake_bands(height=height, width=width, nir=0.7, swir2=0.2)
@@ -67,6 +69,25 @@ def test_compute_post_window_long_fire_uses_end_minus_three():
     start, stop = sr.compute_post_window("2026-07-01", "2026-07-20")
     assert start == "2026-07-17"
     assert stop == "2026-08-01"
+
+
+def test_make_json_defaults_to_least_recent_mosaicking():
+    body = sr.make_json(
+        BBox([0.0, 0.0, 0.1, 0.1], crs=CRS.WGS84), "2026-07-01", "2026-07-02", 4, 5
+    )
+    assert body["input"]["data"][0]["dataFilter"]["mosaickingOrder"] == "leastRecent"
+
+
+def test_make_json_supports_least_cc_mosaicking():
+    body = sr.make_json(
+        BBox([0.0, 0.0, 0.1, 0.1], crs=CRS.WGS84),
+        "2026-07-01",
+        "2026-07-02",
+        4,
+        5,
+        mosaicking="leastCC",
+    )
+    assert body["input"]["data"][0]["dataFilter"]["mosaickingOrder"] == "leastCC"
 
 
 def test_has_imagery_false_when_no_scenes(monkeypatch):
