@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import numpy as np
+
 from data_pipeline import model_inference_v2 as v2
 
 
@@ -35,3 +37,41 @@ def test_download_checkpoint_uses_hub(mock_download):
     mock_download.assert_called_once()
     assert mock_download.call_args.kwargs["repo_id"] == v2.MODEL_REPO
     assert mock_download.call_args.kwargs["filename"] == v2.CHECKPOINT_NAME
+
+
+def test_scale_bands_divides_large_values():
+    bands = np.full((6, 64, 64), 5000.0, dtype=np.float32)
+    scaled = v2.scale_bands(bands)
+    assert scaled.max() <= 1.0
+    assert np.allclose(scaled, 0.5)
+
+
+def test_scale_bands_leaves_reflectance_untouched():
+    bands = np.full((6, 64, 64), 0.4, dtype=np.float32)
+    assert np.allclose(v2.scale_bands(bands), 0.4)
+
+
+def test_pad_to_multiple_reflect_pads():
+    img = np.ones((6, 500, 700), dtype=np.float32)
+    padded = v2.pad_to_multiple(img, v2.PATCH_SIZE)
+    assert padded.shape == (6, 512, 1024)
+    assert np.allclose(padded[:, :500, :700], 1.0)
+
+
+def test_split_windows_returns_grid_dims():
+    img = np.zeros((6, 1024, 1024), dtype=np.float32)
+    img[:, :512, :512] = 1.0
+    windows, h1, w1 = v2.split_windows(img, v2.PATCH_SIZE)
+    assert (h1, w1) == (2, 2)
+    assert windows.shape == (4, 6, 512, 512)
+    assert np.allclose(windows[0], 1.0)
+    assert np.allclose(windows[3], 0.0)
+
+
+def test_merge_windows_round_trips_grid():
+    img = np.random.default_rng(0).random((1, 700, 900), dtype=np.float32)
+    windows, h1, w1 = v2.split_windows(img, v2.PATCH_SIZE)
+    class_tensor = np.stack([np.zeros_like(windows), windows], axis=1)  # (N,2,H,W)
+    merged = v2.merge_windows(class_tensor, h1, w1, img.shape[1], img.shape[2])
+    assert merged.shape == (2, 700, 900)
+    assert np.allclose(merged[1], img, atol=1e-6)

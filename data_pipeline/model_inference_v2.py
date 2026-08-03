@@ -7,6 +7,7 @@ returning softmax probabilities and an argmax class mask.
 
 from pathlib import Path
 
+import numpy as np
 import torch
 
 MODEL_REPO = "ibm-nasa-geospatial/Prithvi-EO-2.0-300M-BurnScars"
@@ -58,3 +59,63 @@ def load_model(checkpoint_path: Path | None = None, device: str | None = None):
     lightning_model.model.eval()
     lightning_model.model.to(device)
     return lightning_model
+
+
+def scale_bands(bands: np.ndarray) -> np.ndarray:
+    """Convert reflectance to 0-1 if needed. Accepts (C,H,W)."""
+    bands = bands.astype(np.float32)
+    if bands.shape[0] > NUM_BANDS:
+        bands = bands[:NUM_BANDS]
+    if bands.max() > 1:
+        bands = bands / 10000.0
+    return bands
+
+
+def pad_to_multiple(img: np.ndarray, size: int) -> np.ndarray:
+    """Reflect-pad the last two dims up to a multiple of *size*."""
+    h, w = img.shape[-2:]
+    pad_h = (size - h % size) % size
+    pad_w = (size - w % size) % size
+    if pad_h or pad_w:
+        pad_width = [(0, 0)] * (img.ndim - 2) + [(0, pad_h), (0, pad_w)]
+        img = np.pad(img, pad_width, mode="reflect")
+    return img
+
+
+def split_windows(img: np.ndarray, size: int) -> tuple[np.ndarray, int, int]:
+    """Split a (C,H,W) image into non-overlapping (N,C,size,size) windows.
+
+    Returns (windows, n_rows, n_cols) where rows/cols are the padded grid dims.
+    """
+    img = pad_to_multiple(img, size)
+    h1 = img.shape[-2] // size
+    w1 = img.shape[-1] // size
+    windows = np.stack(
+        [
+            img[:, y : y + size, x : x + size]
+            for y in range(0, img.shape[-2], size)
+            for x in range(0, img.shape[-1], size)
+        ]
+    )
+    return windows, h1, w1
+
+
+def merge_windows(
+    windows: np.ndarray,
+    n_rows: int,
+    n_cols: int,
+    out_h: int,
+    out_w: int,
+    size: int = PATCH_SIZE,
+) -> np.ndarray:
+    """Inverse of split_windows for a (N,C,size,size) class/prob tensor.
+
+    *windows* row-major order (rows of the padded grid), shape (N, C, size, size).
+    Returns (C, out_h, out_w) cropped back to the original size.
+    """
+    n, c = windows.shape[:2]
+    assert n == n_rows * n_cols
+    grid = windows.reshape(n_rows, n_cols, c, size, size)
+    grid = grid.transpose(2, 0, 3, 1, 4)  # (C, n_rows*size, n_cols*size)
+    grid = grid.reshape(c, n_rows * size, n_cols * size)
+    return grid[:, :out_h, :out_w]
