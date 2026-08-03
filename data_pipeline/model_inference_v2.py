@@ -56,7 +56,9 @@ def load_model(checkpoint_path: Path | None = None, device: str | None = None):
     if checkpoint_path is None:
         checkpoint_path = download_checkpoint()
     device = device or pick_device()
-    lightning_model = LightningInferenceModel.from_config(CONFIG_PATH, checkpoint_path)
+    lightning_model = LightningInferenceModel.from_config(
+        str(CONFIG_PATH), str(checkpoint_path)
+    )
     lightning_model.model.eval()
     lightning_model.model.to(device)
     return lightning_model

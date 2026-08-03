@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+import pytest
 import rasterio
 import torch
 from rasterio.transform import from_bounds
@@ -129,3 +130,32 @@ def test_predict_applies_datamodule_transforms_and_returns_probs():
     assert probs.max() <= 1.0
     assert probs.min() > 0.99  # entire map is the burn class
     assert mask.max() == 1  # burn class predicted where logits positive
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_MODEL_TESTS") != "1",
+    reason="set RUN_MODEL_TESTS=1 to download the ~1.3GB checkpoint",
+)
+def test_run_inference_end_to_end(tmp_path):
+    bands = np.random.default_rng(1).random((6, 64, 64), dtype=np.float32)
+    tif = tmp_path / "input.tif"
+    with rasterio.open(
+        tif,
+        "w",
+        driver="GTiff",
+        height=64,
+        width=64,
+        count=6,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_bounds(0, 0, 1, 1, 64, 64),
+    ) as dst:
+        dst.write(bands)
+
+    model = v2.load_model()
+    probs, mask = v2.run_inference(str(tif), model=model)
+
+    assert probs.shape == (64, 64)
+    assert mask.shape == (64, 64)
+    assert probs.min() >= 0.0 and probs.max() <= 1.0
+    assert mask.dtype == np.uint8
