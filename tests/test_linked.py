@@ -43,12 +43,31 @@ def test_all_axes_match_primary_for_linked_pan_zoom():
     fig = linked.build_linked_figure(
         _event(), _bands(), _bands(), _bands(), "2026-07-16", ndvi_mode="actual"
     )
-    for i in range(2, 5):
-        xaxis = fig.layout[f"xaxis{i}"]
-        yaxis = fig.layout[f"yaxis{i}"]
-        if xaxis.visible is not False:
-            assert xaxis.matches == "x"
-            assert yaxis.matches == "y"
+    for name in fig.layout:
+        if name.startswith("xaxis") and name != "xaxis":
+            assert fig.layout[name].matches == "x"
+        if name.startswith("yaxis") and name != "yaxis":
+            assert fig.layout[name].matches == "y"
+
+
+def test_axis_counts_by_mode_and_no_hidden_axes():
+    base = {
+        "event": _event(),
+        "pre_bands": _bands(),
+        "dur_bands": _bands(),
+        "post_bands": _bands(),
+        "during_date": "2026-07-16",
+    }
+    actual = linked.build_linked_figure(**base, ndvi_mode="actual")
+    delta = linked.build_linked_figure(**base, ndvi_mode="delta")
+    actual_x = [n for n in actual.layout if n.startswith("xaxis")]
+    delta_x = [n for n in delta.layout if n.startswith("xaxis")]
+    assert len(actual_x) == 7  # before(2) + during(2) + after(3)
+    assert len(delta_x) == 8  # after gains ΔNDVI
+    for fig in (actual, delta):
+        for name in fig.layout:
+            if name.startswith("xaxis") or name.startswith("yaxis"):
+                assert fig.layout[name].visible is not False
 
 
 def test_trace_counts_by_mode():

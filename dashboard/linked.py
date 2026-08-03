@@ -20,17 +20,13 @@ NDVI_SCALE = ("YlGn", -0.3, 0.9)
 DELTA_SCALE = ("RdYlGn", -0.5, 0.5)
 DNBR_SCALE = ("RdYlGn_r", -0.2, 0.8)
 
-# Empty subplot axes (before/during rows only use cols 1-2) hidden for clarity.
-HIDDEN_AXES = [
-    "xaxis3",
-    "yaxis3",
-    "xaxis4",
-    "yaxis4",
-    "xaxis7",
-    "yaxis7",
-    "xaxis8",
-    "yaxis8",
-]
+# Before/during panels each span 2 grid columns so they render ~2x wider than
+# the compact after row. None cells create no axes, so nothing needs hiding.
+_BEFORE_DURING_SPEC = [{"colspan": 2}, None, {"colspan": 2}, None]
+
+
+def _colorbar(title: str):
+    return dict(title=title, thickness=8, len=0.65, xpad=2)
 
 
 def rgb_trace(bands: np.ndarray, event):
@@ -59,7 +55,7 @@ def index_trace(values: np.ndarray, colorscale, vmin, vmax, title: str, event):
         colorscale=colorscale,
         zmin=vmin,
         zmax=vmax,
-        colorbar=dict(title=title),
+        colorbar=_colorbar(title),
         hovertemplate="lon %{x:.3f}, lat %{y:.3f}<br>%{z:.3f}<extra></extra>",
     )
 
@@ -82,11 +78,11 @@ def severity_trace(dnbr: np.ndarray, event):
         colorscale=colorscale,
         zmin=-0.5,
         zmax=len(SEVERITY_NAMES) - 0.5,
-        colorbar=dict(
-            title="severity",
-            tickvals=list(range(len(SEVERITY_NAMES))),
-            ticktext=SEVERITY_NAMES,
-        ),
+        colorbar={
+            **_colorbar("severity"),
+            "tickvals": list(range(len(SEVERITY_NAMES))),
+            "ticktext": SEVERITY_NAMES,
+        },
         hovertemplate="lon %{x:.3f}, lat %{y:.3f}<extra></extra>",
     )
 
@@ -114,36 +110,52 @@ def build_linked_figure(
 
     dnbr = compute_nbr(pre_bands) - compute_nbr(post_bands)
 
-    fig = make_subplots(
-        rows=3,
-        cols=4,
-        subplot_titles=[
-            "Before — RGB",
-            "Before — NDVI",
-            "",
-            "",
-            "During — RGB",
-            f"During — {dur_title} ({during_date})",
-            "",
-            "",
+    if ndvi_mode == "delta":
+        specs = [_BEFORE_DURING_SPEC, _BEFORE_DURING_SPEC, [{}, {}, {}, {}]]
+        after_titles = [
             "After — RGB",
             "After — dNBR",
             "After — severity",
             "After — ΔNDVI",
+        ]
+    else:
+        specs = [
+            _BEFORE_DURING_SPEC,
+            _BEFORE_DURING_SPEC,
+            [{}, {}, {"colspan": 2}, None],
+        ]
+        after_titles = ["After — RGB", "After — dNBR", "After — severity", ""]
+
+    fig = make_subplots(
+        rows=3,
+        cols=4,
+        specs=specs,
+        horizontal_spacing=0.04,
+        vertical_spacing=0.10,
+        subplot_titles=[
+            "Before — RGB",
+            "",
+            "Before — NDVI",
+            "",
+            "During — RGB",
+            "",
+            f"During — {dur_title} ({during_date})",
+            "",
+            *after_titles,
         ],
     )
 
-    # before
+    # before (RGB spans cols 1-2, NDVI spans cols 3-4)
     fig.add_trace(rgb_trace(pre_bands, event), row=1, col=1)
     fig.add_trace(
-        index_trace(compute_ndvi(pre_bands), *NDVI_SCALE, "NDVI", event), row=1, col=2
+        index_trace(compute_ndvi(pre_bands), *NDVI_SCALE, "NDVI", event), row=1, col=3
     )
     # during
     fig.add_trace(rgb_trace(dur_bands, event), row=2, col=1)
     fig.add_trace(
         index_trace(dur_values, dur_cs, dur_vmin, dur_vmax, dur_title, event),
         row=2,
-        col=2,
+        col=3,
     )
     # after
     fig.add_trace(rgb_trace(post_bands, event), row=3, col=1)
@@ -163,11 +175,10 @@ def build_linked_figure(
     fig.update_yaxes(matches="y")
     fig.update_xaxes(range=[min_lon, max_lon])
     fig.update_yaxes(range=[min_lat, max_lat])
-    for name in HIDDEN_AXES:
-        fig.layout[name].update(visible=False)
 
     fig.update_layout(
-        height=720,
+        height=800,
+        margin=dict(r=120),
         title=f"{event.country} — cluster {event.cluster_id} (resolution {resolution} m)",
         modebar=dict(remove=["lasso2d", "select2d"]),
         hoverlabel=dict(bgcolor="white", font_size=12),
