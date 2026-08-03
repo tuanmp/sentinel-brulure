@@ -1,8 +1,8 @@
 """Prithvi-EO-2.0-300M burn scar inference (TerraTorch-backed).
 
-Drop-in for the legacy 100M module. Loads the fine-tuned V2-300M checkpoint
-with LightningInferenceModel and runs sliding-window 512x512 inference,
-returning softmax probabilities and an argmax class mask.
+Parallel to the legacy 100M module (data_pipeline/model_inference.py) but uses
+the TerraTorch-backed Prithvi-EO-2.0-300M checkpoint. Runs sliding-window
+512x512 inference and returns softmax probabilities plus an argmax class mask.
 """
 
 from pathlib import Path
@@ -14,6 +14,7 @@ MODEL_REPO = "ibm-nasa-geospatial/Prithvi-EO-2.0-300M-BurnScars"
 CHECKPOINT_NAME = "Prithvi_EO_V2_300M_BurnScars.pt"
 PATCH_SIZE = 512
 NUM_BANDS = 6
+BURN_CLASS = 1
 
 CONFIG_PATH = (
     Path(__file__).resolve().parent / "configs" / "prithvi_v2_burn_scars_inference.yaml"
@@ -136,6 +137,7 @@ def predict(
         model = load_model(device=device)
     device = device or pick_device()
     model.model.to(device)
+    model.model.eval()
 
     datamodule = model.datamodule
     img = scale_bands(bands)
@@ -155,7 +157,7 @@ def predict(
     probs_all = e / e.sum(axis=1, keepdims=True)  # (N, num_classes, 512, 512)
 
     merged = merge_windows(probs_all, n_rows, n_cols, img.shape[1], img.shape[2])
-    probs = merged[1].astype(np.float32)
+    probs = merged[BURN_CLASS].astype(np.float32)
     class_mask = np.argmax(merged, axis=0).astype(np.uint8)
     return probs, class_mask
 

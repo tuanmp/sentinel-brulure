@@ -127,4 +127,5 @@ def test_predict_applies_datamodule_transforms_and_returns_probs():
     assert mask.shape == (64, 64)
     assert mask.dtype == np.uint8
     assert probs.max() <= 1.0
+    assert probs.min() > 0.99  # entire map is the burn class
     assert mask.max() == 1  # burn class predicted where logits positive
