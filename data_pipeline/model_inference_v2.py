@@ -119,3 +119,73 @@ def merge_windows(
     grid = grid.transpose(2, 0, 3, 1, 4)  # (C, n_rows*size, n_cols*size)
     grid = grid.reshape(c, n_rows * size, n_cols * size)
     return grid[:, :out_h, :out_w]
+
+
+def predict(
+    bands: np.ndarray,
+    model=None,
+    device: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run V2-300M inference on a (6,H,W) reflectance array.
+
+    Returns (probs, class_mask):
+      probs      — softmax probability of the burn class, (H,W) float32 in [0,1]
+      class_mask — argmax class, (H,W) uint8 (0 = not burned, 1 = burn scar)
+    """
+    if model is None:
+        model = load_model(device=device)
+    device = device or pick_device()
+    model.model.to(device)
+
+    datamodule = model.datamodule
+    img = scale_bands(bands)
+    windows, n_rows, n_cols = split_windows(img, PATCH_SIZE)
+
+    logits = []
+    with torch.no_grad():
+        for window in windows:
+            example = datamodule.test_transform(image=window.transpose(1, 2, 0))
+            example["image"] = example["image"].unsqueeze(0).to(device)
+            normalized = datamodule.aug(example)["image"].to(device)
+            out = model.model(normalized).output  # (1, num_classes, 512, 512)
+            logits.append(out.cpu().numpy())
+
+    all_logits = np.concatenate(logits, axis=0)  # (N, num_classes, 512, 512)
+    e = np.exp(all_logits - all_logits.max(axis=1, keepdims=True))
+    probs_all = e / e.sum(axis=1, keepdims=True)  # (N, num_classes, 512, 512)
+
+    merged = merge_windows(probs_all, n_rows, n_cols, img.shape[1], img.shape[2])
+    probs = merged[1].astype(np.float32)
+    class_mask = np.argmax(merged, axis=0).astype(np.uint8)
+    return probs, class_mask
+
+
+def prepare_input(geotiff_path: str) -> np.ndarray:
+    """Read a 6-band GeoTIFF into a (6,H,W) float32 reflectance array."""
+    import rasterio
+
+    with rasterio.open(geotiff_path) as src:
+        data = src.read().astype(np.float32)
+    if data.shape[0] > NUM_BANDS:
+        data = data[:NUM_BANDS]
+    return data
+
+
+def run_inference(
+    geotiff_path: str,
+    model=None,
+    device: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convenience: read a 6-band GeoTIFF and predict. Returns (probs, class_mask)."""
+    return predict(prepare_input(geotiff_path), model=model, device=device)
+
+
+def save_mask(mask: np.ndarray, output_path: str, reference_geotiff: str) -> None:
+    """Write a single-band mask GeoTIFF sharing the reference georeferencing."""
+    import rasterio
+
+    with rasterio.open(reference_geotiff) as src:
+        profile = src.profile.copy()
+    profile.update(count=1, dtype=rasterio.float32)
+    with rasterio.open(output_path, "w", **profile) as dst:
+        dst.write(mask.astype(rasterio.float32), 1)

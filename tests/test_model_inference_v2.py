@@ -1,6 +1,12 @@
-from unittest.mock import patch
+import os
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import numpy as np
+import rasterio
+import torch
+from rasterio.transform import from_bounds
 
 from data_pipeline import model_inference_v2 as v2
 
@@ -75,3 +81,50 @@ def test_merge_windows_round_trips_grid():
     merged = v2.merge_windows(class_tensor, h1, w1, img.shape[1], img.shape[2])
     assert merged.shape == (2, 700, 900)
     assert np.allclose(merged[1], img, atol=1e-6)
+
+
+def test_save_mask_writes_georeferenced_geotiff():
+    bands = np.zeros((6, 32, 32), dtype=np.float32)
+    with tempfile.TemporaryDirectory() as tmp:
+        ref = os.path.join(tmp, "ref.tif")
+        with rasterio.open(
+            ref,
+            "w",
+            driver="GTiff",
+            height=32,
+            width=32,
+            count=6,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=from_bounds(0, 0, 1, 1, 32, 32),
+        ) as dst:
+            dst.write(bands)
+        out = os.path.join(tmp, "mask.tif")
+        mask = np.full((32, 32), 0.7, dtype=np.float32)
+        v2.save_mask(mask, out, ref)
+        with rasterio.open(out) as src:
+            assert src.count == 1
+            assert (src.height, src.width) == (32, 32)
+            assert src.crs.to_string() == "EPSG:4326"
+            assert np.allclose(src.read(1), 0.7)
+
+
+def test_predict_applies_datamodule_transforms_and_returns_probs():
+    logits = torch.zeros(1, 2, 512, 512, dtype=torch.float32)
+    logits[:, 1] = 10.0  # burn class wins everywhere
+    fake_logits = SimpleNamespace(output=logits)
+    fake_model = Mock()
+    fake_model.model.return_value = fake_logits
+    fake_datamodule = Mock()
+    fake_model.datamodule = fake_datamodule
+    fake_datamodule.test_transform.return_value = {"image": torch.zeros(6, 512, 512)}
+    fake_datamodule.aug.return_value = {"image": torch.zeros(1, 6, 512, 512)}
+
+    bands = np.zeros((6, 64, 64), dtype=np.float32)
+    probs, mask = v2.predict(bands, model=fake_model, device="cpu")
+
+    assert probs.shape == (64, 64)
+    assert mask.shape == (64, 64)
+    assert mask.dtype == np.uint8
+    assert probs.max() <= 1.0
+    assert mask.max() == 1  # burn class predicted where logits positive
