@@ -1,5 +1,9 @@
+import io
+import json
 import sys
 from datetime import date as _date
+from datetime import datetime as _datetime
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -8,14 +12,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from analytics.report import export_csv, export_json, render_html
 from analytics.store import EventStore
+from dashboard import glossary
 from dashboard.imagery import (
+    cached_severity_areas,
     fetch_phase_bands,
     peak_frp_date,
     render_after,
     render_before,
     render_during,
+    valid_fraction,
 )
+from data_pipeline.sentinel_request import compute_post_window
 
 st.set_page_config(page_title="Fire Analytics Dashboard", layout="wide")
 
@@ -61,31 +70,98 @@ def _event_row(event) -> dict:
 
 
 def _events_frame(events) -> pd.DataFrame:
-    rows = [_event_row(e) for e in events]
-    return pd.DataFrame(rows)
+    return pd.DataFrame([_event_row(e) for e in events])
 
 
 def _status_color(status: str) -> str:
     return STATUS_COLORS.get(status, "#999999")
 
 
-def _render_phase_cached(event, phase, date, resolution):
-    """Fetch bands with an inline spinner; return figure or None."""
+def _events_column_config():
+    g = glossary.GLOSSARY
+    return {
+        "status": st.column_config.TextColumn(
+            "Status", help="Lifecycle stage — see the glossary in the sidebar."
+        ),
+        "cluster_id": st.column_config.NumberColumn("Cluster", help=g["cluster_id"]),
+        "start_date": st.column_config.TextColumn(
+            "Start", help="First day of fire detections."
+        ),
+        "end_date": st.column_config.TextColumn(
+            "End", help="Last day of fire detections."
+        ),
+        "quiet_days": st.column_config.NumberColumn("Quiet days", help=g["quiet_days"]),
+        "burned_ha": st.column_config.NumberColumn(
+            "Burned (ha)", help=g["burned_area_ha"]
+        ),
+        "peak_frp_mw": st.column_config.NumberColumn("Peak FRP (MW)", help=g["FRP"]),
+        "ndvi": st.column_config.NumberColumn("Pre NDVI", help=g["NDVI"]),
+        "weather_index": st.column_config.NumberColumn(
+            "Weather", help=g["weather_index"]
+        ),
+        "obs": st.column_config.NumberColumn(
+            "Obs", help="Number of daily during-phase observations."
+        ),
+        "failures": st.column_config.NumberColumn(
+            "Failures", help="Transient tracking failures recorded for this event."
+        ),
+    }
+
+
+def _obs_column_config():
+    g = glossary.GLOSSARY
+    return {
+        "date": st.column_config.TextColumn("Date", help="Observation day."),
+        "frp_mw": st.column_config.NumberColumn("FRP (MW)", help=g["FRP"]),
+        "detection_count": st.column_config.NumberColumn(
+            "Detections", help=g["detection_count"]
+        ),
+        "bbox_growth_deg": st.column_config.NumberColumn(
+            "BBox growth (deg)", help=g["bbox_growth_deg"]
+        ),
+    }
+
+
+def _kpi_row(events) -> None:
+    counts = {s: sum(1 for e in events if e.status == s) for s in STATUS_ORDER}
+    total_ha = sum(
+        (e.postfire_assessment or {}).get("burned_area_ha") or 0.0 for e in events
+    )
+    peaks = [
+        max((o["frp_mw"] for o in e.during_observations), default=0.0) for e in events
+    ]
+    max_frp = max(peaks) if peaks else 0.0
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    c1.metric("Events", len(events))
+    c2.metric("Active", counts["active"])
+    c3.metric("Ended", counts["ended"])
+    c4.metric("Recovering", counts["recovering"])
+    c5.metric("Complete", counts["complete"])
+    c6.metric("Total burned (ha)", f"{total_ha:,.0f}")
+    c7.metric("Max peak FRP (MW)", f"{max_frp:,.0f}")
+
+
+def _load_bands(event, phase, date, resolution):
     try:
-        bands = fetch_phase_bands(event, phase, date=date, resolution=resolution)
+        return fetch_phase_bands(event, phase, date=date, resolution=resolution)
     except Exception as exc:  # API/token failure -> surface, don't crash
         st.error(f"Imagery fetch failed for {phase}: {exc}")
         return None
-    if bands is None:
-        return None
-    if phase == "before":
-        return render_before(event, bands)
-    if phase == "during":
-        return render_during(event, bands, date)
-    pre = fetch_phase_bands(event, "before", date=None, resolution=resolution)
-    if pre is None:
-        return None
-    return render_after(event, pre, bands, resolution)
+
+
+def _badge_if_low_valid(bands) -> None:
+    frac = valid_fraction(bands)
+    if frac < 0.30:
+        st.warning(
+            f"Only {frac:.0%} of pixels have valid data — the scene may be cloudy "
+            "or no-data."
+        )
+
+
+def _fig_png_bytes(fig) -> bytes:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    return buf.getvalue()
 
 
 def _frp_figure(event):
@@ -96,12 +172,70 @@ def _frp_figure(event):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=dates, y=frp, mode="lines+markers", name="FRP (MW)"))
     fig.add_trace(go.Bar(x=dates, y=dets, name="Detections", yaxis="y2", opacity=0.4))
+    if frp:
+        peak_i = max(range(len(frp)), key=lambda i: frp[i])
+        fig.add_trace(
+            go.Scatter(
+                x=[dates[peak_i]],
+                y=[frp[peak_i]],
+                mode="markers",
+                marker=dict(size=14, color="red", symbol="star"),
+                name="peak FRP",
+            )
+        )
     fig.update_layout(
         title="Fire Radiative Power over time",
         yaxis_title="FRP (MW)",
         yaxis2=dict(title="Detections", overlaying="y", side="right"),
         hovermode="x unified",
         height=400,
+    )
+    return fig
+
+
+def _lifecycle_figure(event):
+    s = _datetime.fromisoformat(event.start_date)
+    e = _datetime.fromisoformat(event.end_date)
+    post_s, post_e = compute_post_window(event.start_date, event.end_date)
+    post_s, post_e = _datetime.fromisoformat(post_s), _datetime.fromisoformat(post_e)
+    fig = go.Figure()
+    rows = [
+        ("pre-fire", s - timedelta(days=15), s - timedelta(days=1), "#1f77b4"),
+        ("active (burning)", s, e, "#ff7f0e"),
+        ("post-fire assessment", post_s, post_e, "#d62728"),
+    ]
+    for name, a, b, color in rows:
+        fig.add_trace(
+            go.Bar(
+                y=[name],
+                base=[a],
+                x=[(b - a).days],
+                orientation="h",
+                marker_color=color,
+                name=name,
+                hovertemplate=f"{name}<br>{a.date()} → {b.date()}<extra></extra>",
+            )
+        )
+    if event.recovery_samples:
+        xs = [
+            e + timedelta(days=30 * smp["offset_months"])
+            for smp in event.recovery_samples
+        ]
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=["recovery"] * len(xs),
+                mode="markers",
+                marker=dict(symbol="diamond", size=12, color="#2ca02c"),
+                name="recovery sample",
+            )
+        )
+    fig.update_layout(
+        title="Lifecycle timeline",
+        xaxis_title="Date",
+        height=230,
+        showlegend=False,
+        barmode="overlay",
     )
     return fig
 
@@ -117,6 +251,12 @@ def main():
         if st.button("Refresh store"):
             st.cache_data.clear()
             st.rerun()
+        with st.expander("Glossary / How to read this"):
+            st.markdown(glossary.README_INTRO)
+            for group, entries in glossary.TERM_GROUPS.items():
+                st.markdown(f"**{group}**")
+                for term, definition in entries:
+                    st.markdown(f"- **{term}**: {definition}")
 
     store = EventStore(root)
     events = [e for e in store.list_events() if e.status in status_filter]
@@ -142,6 +282,7 @@ def main():
     )
 
     with tab_overview:
+        _kpi_row(events)
         col_map, col_table = st.columns([1, 2])
         with col_map:
             map_df = df.copy()
@@ -166,6 +307,7 @@ def main():
                 key="events_table",
                 hide_index=True,
                 width="stretch",
+                column_config=_events_column_config(),
             )
 
     selected_rows = []
@@ -184,12 +326,21 @@ def main():
 
     with tab_overview:
         st.subheader(f"Event {event.event_id[:8]} — {event.country}")
+        g = glossary.GLOSSARY
         c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Status", event.status)
-        c2.metric("Burned area (ha)", _fmt(post.get("burned_area_ha")))
-        c3.metric("Peak FRP (MW)", _fmt(_event_row(event)["peak_frp_mw"]))
-        c4.metric("Pre NDVI", _fmt(pre.get("ndvi")))
-        c5.metric("Weather index", _fmt(pre.get("weather_index")))
+        c1.metric("Status", event.status, help=g.get(event.status, "Lifecycle stage."))
+        c2.metric(
+            "Burned area (ha)",
+            _fmt(post.get("burned_area_ha")),
+            help=g["burned_area_ha"],
+        )
+        c3.metric(
+            "Peak FRP (MW)", _fmt(_event_row(event)["peak_frp_mw"]), help=g["FRP"]
+        )
+        c4.metric("Pre NDVI", _fmt(pre.get("ndvi")), help=g["NDVI"])
+        c5.metric(
+            "Weather index", _fmt(pre.get("weather_index")), help=g["weather_index"]
+        )
         c6.metric("Failures", len(event.failures))
         st.write(
             {
@@ -201,6 +352,26 @@ def main():
                 "centroid": [event.centroid_lat, event.centroid_lon],
             }
         )
+        st.plotly_chart(_lifecycle_figure(event), width="stretch")
+        dc1, dc2, dc3 = st.columns(3)
+        dc1.download_button(
+            "Download JSON",
+            json.dumps(export_json(event), indent=2),
+            file_name=f"{event.event_id}.json",
+            mime="application/json",
+        )
+        dc2.download_button(
+            "Download observations CSV",
+            export_csv(event.during_observations),
+            file_name=f"{event.event_id}_observations.csv",
+            mime="text/csv",
+        )
+        dc3.download_button(
+            "Download HTML report",
+            render_html(event),
+            file_name=f"{event.event_id}.html",
+            mime="text/html",
+        )
 
     with tab_progress:
         st.subheader("Before / During / After — Sentinel-2")
@@ -208,13 +379,36 @@ def main():
             f"Imagery fetched on demand ({resolution} m) and cached under "
             "`reports/imagery/`. LEAST-CC mosaicking picks the clearest scene."
         )
+        ndvi_mode = (
+            "delta"
+            if st.radio(
+                "NDVI view",
+                ["Actual NDVI", "ΔNDVI vs pre-fire"],
+                horizontal=True,
+                key="ndvi_mode",
+            )
+            == "ΔNDVI vs pre-fire"
+            else "actual"
+        )
+
+        pre_bands = _load_bands(event, "before", None, resolution)
         st.markdown("#### Before (pre-fire)")
-        with st.spinner("Fetching pre-fire imagery..."):
-            fig = _render_phase_cached(event, "before", None, resolution)
-        if fig is None:
+        if pre_bands is None:
             st.warning("No Sentinel-2 imagery available for the pre-fire window.")
         else:
+            fig = render_before(event, pre_bands)
             st.pyplot(fig)
+            _badge_if_low_valid(pre_bands)
+            if ndvi_mode == "delta":
+                st.caption(
+                    "Reference image — ΔNDVI is measured relative to this pre-fire scene."
+                )
+            st.download_button(
+                "Download pre-fire PNG",
+                _fig_png_bytes(fig),
+                file_name=f"{event.event_id[:8]}_before.png",
+                mime="image/png",
+            )
 
         st.markdown("#### During (mid-fire)")
         obs_dates = sorted({o["date"] for o in event.during_observations})
@@ -240,27 +434,71 @@ def main():
             format="YYYY-MM-DD",
             key="during_slider",
         )
-        with st.spinner("Fetching during imagery..."):
-            fig = _render_phase_cached(
-                event, "during", selected.isoformat(), resolution
-            )
-        if fig is None:
+        dur_bands = _load_bands(event, "during", selected.isoformat(), resolution)
+        if dur_bands is None:
             st.warning("No Sentinel-2 imagery available for the selected during date.")
         else:
+            fig = render_during(
+                event,
+                dur_bands,
+                selected.isoformat(),
+                ndvi_mode=ndvi_mode,
+                pre_bands=pre_bands,
+            )
             st.pyplot(fig)
+            _badge_if_low_valid(dur_bands)
+            st.download_button(
+                "Download during PNG",
+                _fig_png_bytes(fig),
+                file_name=f"{event.event_id[:8]}_during_{selected.isoformat()}.png",
+                mime="image/png",
+            )
 
         st.markdown("#### After (post-fire)")
-        with st.spinner("Fetching post-fire imagery..."):
-            fig = _render_phase_cached(event, "after", None, resolution)
-        if fig is None:
+        post_bands = _load_bands(event, "after", None, resolution)
+        if post_bands is None or pre_bands is None:
             st.warning("No Sentinel-2 imagery available for the post-fire window.")
         else:
+            fig = render_after(
+                event, pre_bands, post_bands, resolution, ndvi_mode=ndvi_mode
+            )
             st.pyplot(fig)
+            _badge_if_low_valid(post_bands)
+            st.download_button(
+                "Download post-fire PNG",
+                _fig_png_bytes(fig),
+                file_name=f"{event.event_id[:8]}_after.png",
+                mime="image/png",
+            )
 
     with tab_during:
-        st.plotly_chart(_frp_figure(event), width="stretch")
+        sel_frp = st.plotly_chart(
+            _frp_figure(event),
+            on_select="rerun",
+            selection_mode="points",
+            key="frp_chart",
+            width="stretch",
+        )
+        try:
+            points = sel_frp.selection.points
+            if points:
+                clicked = points[0].get("x")
+                if clicked and st.session_state.get("_last_frp_click") != clicked:
+                    st.session_state["_last_frp_click"] = clicked
+                    try:
+                        st.session_state["during_slider"] = _date.fromisoformat(clicked)
+                        st.rerun()
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+        st.caption(
+            "Click a point on the chart to jump the during-date slider in the "
+            "Satellite progression tab."
+        )
         st.dataframe(
             pd.DataFrame(event.during_observations),
+            column_config=_obs_column_config(),
             hide_index=True,
             width="stretch",
         )
@@ -272,10 +510,7 @@ def main():
             severity = post.get("severity_classes", {})
             if severity:
                 sv = pd.DataFrame(
-                    {
-                        "class": list(severity.keys()),
-                        "share": list(severity.values()),
-                    }
+                    {"class": list(severity.keys()), "share": list(severity.values())}
                 )
                 fig = go.Figure(
                     go.Bar(x=sv["class"], y=sv["share"], marker_color="#e31a1c")
@@ -284,6 +519,29 @@ def main():
                     title="Burn severity class share", yaxis_title="Fraction"
                 )
                 st.plotly_chart(fig, width="stretch")
+            areas = cached_severity_areas(event, resolution=resolution)
+            if areas is not None:
+                area_df = pd.DataFrame(
+                    {"class": list(areas.keys()), "area_ha": list(areas.values())}
+                )
+                st.dataframe(
+                    area_df,
+                    column_config={
+                        "area_ha": st.column_config.NumberColumn(
+                            "Area (ha)", help=g["burned_area_ha"]
+                        )
+                    },
+                    hide_index=True,
+                    width="stretch",
+                )
+                st.caption(
+                    "Per-class burned area computed from cached satellite imagery."
+                )
+            else:
+                st.caption(
+                    "View the Satellite progression tab to compute per-class burned "
+                    "area (hectares)."
+                )
             st.write({k: v for k, v in post.items() if k != "severity_classes"})
 
     with tab_recovery:
@@ -292,16 +550,36 @@ def main():
             st.info("No recovery samples yet.")
         else:
             st.dataframe(pd.DataFrame(samples), hide_index=True, width="stretch")
-            fig = go.Figure(
+            offsets = [s["offset_months"] for s in samples]
+            ndvis = [s.get("ndvi") for s in samples]
+            regrows = [s.get("regrowth_ratio") for s in samples]
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(x=offsets, y=ndvis, mode="lines+markers", name="NDVI")
+            )
+            baseline = pre.get("ndvi")
+            if baseline is not None:
+                fig.add_hline(
+                    y=baseline,
+                    line_dash="dash",
+                    line_color="#888",
+                    annotation_text="pre-fire NDVI baseline",
+                    annotation_position="top right",
+                )
+            fig.add_trace(
                 go.Scatter(
-                    x=[s["offset_months"] for s in samples],
-                    y=[s.get("ndvi") for s in samples],
+                    x=offsets,
+                    y=regrows,
                     mode="lines+markers",
-                    name="NDVI",
+                    name="regrowth ratio",
+                    yaxis="y2",
                 )
             )
             fig.update_layout(
-                title="Recovery NDVI by month offset", xaxis_title="Months after fire"
+                title="Recovery by month offset",
+                xaxis_title="Months after fire",
+                yaxis_title="NDVI",
+                yaxis2=dict(overlaying="y", side="right", title="regrowth ratio"),
             )
             st.plotly_chart(fig, width="stretch")
 

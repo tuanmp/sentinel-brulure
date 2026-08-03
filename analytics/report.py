@@ -86,9 +86,9 @@ def _recovery_table(event: FireEvent) -> str:
     )
 
 
-def build_html_report(event: FireEvent, output_path) -> None:
+def render_html(event: FireEvent) -> str:
     pre = event.prefire_metrics or {}
-    html = f"""<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Fire {_esc(event.event_id)}</title></head>
 <body>
@@ -108,4 +108,7 @@ def build_html_report(event: FireEvent, output_path) -> None:
 </body>
 </html>
 """
-    Path(output_path).write_text(html)
+
+
+def build_html_report(event: FireEvent, output_path) -> None:
+    Path(output_path).write_text(render_html(event))

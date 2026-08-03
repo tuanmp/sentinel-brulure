@@ -170,3 +170,84 @@ def test_renderers_handle_all_nan_data():
     fig = imagery.render_before(_event(), blank)
     assert isinstance(fig, matplotlib.figure.Figure)
     assert len(_panels(fig)) == 2
+
+
+def _bands_custom(red=0.2, nir=0.7):
+    bands = np.zeros((7, 4, 4), dtype=np.float32)
+    bands[2] = red
+    bands[3] = nir
+    bands[6] = 1
+    return bands
+
+
+def test_delta_ndvi_matches_manual_difference():
+    pre = _bands_custom(red=0.2, nir=0.7)
+    during = _bands_custom(red=0.3, nir=0.4)
+    ndvi_pre = imagery.compute_ndvi(pre)
+    ndvi_during = imagery.compute_ndvi(during)
+    expected = ndvi_during - ndvi_pre
+    assert np.allclose(imagery.delta_ndvi(pre, during), expected)
+
+
+def test_valid_fraction_uses_data_mask():
+    bands = _bands()
+    assert imagery.valid_fraction(bands) == 1.0
+    bands[6] = 0
+    assert imagery.valid_fraction(bands) == 0.0
+    bands[6][:, :4] = 1
+    assert imagery.valid_fraction(bands) == 0.5
+
+
+def test_severity_areas_ha_counts_per_class():
+    dnbr = np.full((10, 10), np.nan)
+    dnbr[0:4, :] = 0.05  # unburned (40 px)
+    dnbr[4:6, :] = 0.5  # high (20 px)
+    dnbr[6:10, :] = np.nan  # no data (40 px)
+    areas = imagery.severity_areas_ha(dnbr, resolution=60)
+    assert areas["unburned"] == 40 * 0.36
+    assert areas["high"] == 20 * 0.36
+    assert areas["moderate"] == 0.0
+
+
+def test_render_during_delta_mode_shows_delta_panel():
+    fig = imagery.render_during(
+        _event(), _bands(), "2026-07-16", ndvi_mode="delta", pre_bands=_bands()
+    )
+    panels = _panels(fig)
+    assert len(panels) == 2
+    assert "ΔNDVI" in panels[1].get_title()
+
+
+def test_render_after_delta_mode_adds_fourth_panel():
+    fig = imagery.render_after(
+        _event(), _bands(), _bands(), resolution=60, ndvi_mode="delta"
+    )
+    panels = _panels(fig)
+    assert len(panels) == 4
+    assert "ΔNDVI" in panels[3].get_title()
+
+
+def test_render_before_includes_valid_pct_in_title():
+    fig = imagery.render_before(_event(), _bands())
+    assert "valid" in (fig._suptitle.get_text() if fig._suptitle else "").lower()
+
+
+def test_load_cached_phase_none_without_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(imagery, "CACHE_ROOT", tmp_path)
+    assert imagery.load_cached_phase(_event(), "before") is None
+
+
+def test_cached_severity_areas_none_without_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(imagery, "CACHE_ROOT", tmp_path)
+    assert imagery.cached_severity_areas(_event()) is None
+
+
+def test_cached_severity_areas_reads_from_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(imagery, "CACHE_ROOT", tmp_path)
+    pre = _bands_custom(red=0.2, nir=0.7)
+    post = _bands_custom(red=0.5, nir=0.3)
+    imagery.save_bands(imagery.cache_path("evt-1", "before", "2026-06-27", 60), pre)
+    imagery.save_bands(imagery.cache_path("evt-1", "after", "2026-07-15", 60), post)
+    areas = imagery.cached_severity_areas(_event(), resolution=60)
+    assert areas is not None
+    assert set(areas) == {"unburned", "low", "moderate", "high", "very_high"}

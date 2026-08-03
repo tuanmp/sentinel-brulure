@@ -68,3 +68,11 @@ def test_build_html_report_writes_file(tmp_path, monkeypatch):
     assert "CHART_DATA" in html
     assert "Fire Radiative Power" in html
     assert "Recovery" in html
+
+
+def test_render_html_returns_matching_string(monkeypatch):
+    monkeypatch.setattr(report, "_frp_chart", lambda event: "CHART_DATA")
+    html = report.render_html(_event())
+    assert html.startswith("<!DOCTYPE html>")
+    assert "france" in html
+    assert "CHART_DATA" in html
