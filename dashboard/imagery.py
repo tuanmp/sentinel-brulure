@@ -240,6 +240,11 @@ def _severity_labels(dnbr: np.ndarray) -> np.ndarray:
     return labels
 
 
+def severity_labels(dnbr: np.ndarray) -> np.ndarray:
+    """Per-pixel severity class labels (-1 = no data)."""
+    return _severity_labels(dnbr)
+
+
 def severity_areas_ha(dnbr: np.ndarray, resolution: int = 60) -> dict[str, float]:
     """Hectares per severity class."""
     labels = _severity_labels(dnbr)

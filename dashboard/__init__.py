@@ -13,6 +13,7 @@ from .imagery import (
     render_during,
     save_bands,
     severity_areas_ha,
+    severity_labels,
     valid_fraction,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "render_during",
     "save_bands",
     "severity_areas_ha",
+    "severity_labels",
     "valid_fraction",
 ]

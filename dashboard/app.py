@@ -24,6 +24,7 @@ from dashboard.imagery import (
     render_during,
     valid_fraction,
 )
+from dashboard.linked import build_linked_figure
 from data_pipeline.sentinel_request import compute_post_window
 
 st.set_page_config(page_title="Fire Analytics Dashboard", layout="wide")
@@ -149,12 +150,12 @@ def _load_bands(event, phase, date, resolution):
         return None
 
 
-def _badge_if_low_valid(bands) -> None:
+def _badge_if_low_valid(bands, label) -> None:
     frac = valid_fraction(bands)
     if frac < 0.30:
         st.warning(
-            f"Only {frac:.0%} of pixels have valid data — the scene may be cloudy "
-            "or no-data."
+            f"{label}: only {frac:.0%} of pixels have valid data — the scene may "
+            "be cloudy or no-data."
         )
 
 
@@ -379,6 +380,10 @@ def main():
             f"Imagery fetched on demand ({resolution} m) and cached under "
             "`reports/imagery/`. LEAST-CC mosaicking picks the clearest scene."
         )
+        st.caption(
+            "All panels are linked: zoom or pan on any image and the rest follow "
+            "to the same geographic segment."
+        )
         ndvi_mode = (
             "delta"
             if st.radio(
@@ -392,23 +397,6 @@ def main():
         )
 
         pre_bands = _load_bands(event, "before", None, resolution)
-        st.markdown("#### Before (pre-fire)")
-        if pre_bands is None:
-            st.warning("No Sentinel-2 imagery available for the pre-fire window.")
-        else:
-            fig = render_before(event, pre_bands)
-            st.pyplot(fig)
-            _badge_if_low_valid(pre_bands)
-            if ndvi_mode == "delta":
-                st.caption(
-                    "Reference image — ΔNDVI is measured relative to this pre-fire scene."
-                )
-            st.download_button(
-                "Download pre-fire PNG",
-                _fig_png_bytes(fig),
-                file_name=f"{event.event_id[:8]}_before.png",
-                mime="image/png",
-            )
 
         st.markdown("#### During (mid-fire)")
         obs_dates = sorted({o["date"] for o in event.during_observations})
@@ -435,38 +423,66 @@ def main():
             key="during_slider",
         )
         dur_bands = _load_bands(event, "during", selected.isoformat(), resolution)
-        if dur_bands is None:
-            st.warning("No Sentinel-2 imagery available for the selected during date.")
+        post_bands = _load_bands(event, "after", None, resolution)
+
+        if pre_bands is None or dur_bands is None or post_bands is None:
+            missing = [
+                label
+                for label, bands in [
+                    ("pre-fire", pre_bands),
+                    ("during", dur_bands),
+                    ("post-fire", post_bands),
+                ]
+                if bands is None
+            ]
+            st.warning(f"No Sentinel-2 imagery available for: {', '.join(missing)}.")
         else:
-            fig = render_during(
+            fig = build_linked_figure(
+                event,
+                pre_bands,
+                dur_bands,
+                post_bands,
+                selected.isoformat(),
+                ndvi_mode=ndvi_mode,
+                resolution=resolution,
+            )
+            st.plotly_chart(fig, width="stretch")
+            _badge_if_low_valid(pre_bands, "Pre-fire scene")
+            _badge_if_low_valid(dur_bands, "During scene")
+            _badge_if_low_valid(post_bands, "Post-fire scene")
+            if ndvi_mode == "delta":
+                st.caption(
+                    "ΔNDVI is measured relative to the pre-fire reference image."
+                )
+
+            st.markdown("**Download static images**")
+            c1, c2, c3 = st.columns(3)
+            pre_fig = render_before(event, pre_bands)
+            c1.download_button(
+                "Pre-fire PNG",
+                _fig_png_bytes(pre_fig),
+                file_name=f"{event.event_id[:8]}_before.png",
+                mime="image/png",
+            )
+            dur_fig = render_during(
                 event,
                 dur_bands,
                 selected.isoformat(),
                 ndvi_mode=ndvi_mode,
                 pre_bands=pre_bands,
             )
-            st.pyplot(fig)
-            _badge_if_low_valid(dur_bands)
-            st.download_button(
-                "Download during PNG",
-                _fig_png_bytes(fig),
+            c2.download_button(
+                "During PNG",
+                _fig_png_bytes(dur_fig),
                 file_name=f"{event.event_id[:8]}_during_{selected.isoformat()}.png",
                 mime="image/png",
             )
-
-        st.markdown("#### After (post-fire)")
-        post_bands = _load_bands(event, "after", None, resolution)
-        if post_bands is None or pre_bands is None:
-            st.warning("No Sentinel-2 imagery available for the post-fire window.")
-        else:
-            fig = render_after(
+            post_fig = render_after(
                 event, pre_bands, post_bands, resolution, ndvi_mode=ndvi_mode
             )
-            st.pyplot(fig)
-            _badge_if_low_valid(post_bands)
-            st.download_button(
-                "Download post-fire PNG",
-                _fig_png_bytes(fig),
+            c3.download_button(
+                "Post-fire PNG",
+                _fig_png_bytes(post_fig),
                 file_name=f"{event.event_id[:8]}_after.png",
                 mime="image/png",
             )
