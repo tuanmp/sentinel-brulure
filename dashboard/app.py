@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -25,6 +26,11 @@ from dashboard.imagery import (
     valid_fraction,
 )
 from dashboard.linked import build_linked_figure
+from dashboard.model_view import (
+    load_latest_eval,
+    model_card_markdown,
+    render_overlay,
+)
 from data_pipeline.sentinel_request import compute_post_window
 
 st.set_page_config(page_title="Fire Analytics Dashboard", layout="wide")
@@ -269,7 +275,7 @@ def main():
 
     df = _events_frame(events)
 
-    tab_overview, tab_progress, tab_during, tab_post, tab_recovery, tab_failures = (
+    tab_overview, tab_progress, tab_during, tab_post, tab_recovery, tab_failures, tab_model = (
         st.tabs(
             [
                 "Events",
@@ -278,6 +284,7 @@ def main():
                 "Post-fire severity",
                 "Recovery",
                 "Failures",
+                "Model",
             ]
         )
     )
@@ -450,6 +457,39 @@ def main():
             _badge_if_low_valid(pre_bands, "Pre-fire scene")
             _badge_if_low_valid(dur_bands, "During scene")
             _badge_if_low_valid(post_bands, "Post-fire scene")
+            with st.expander("Burn scar overlay (Prithvi V2-300M)"):
+                run_model = st.button("Run burn-scar model", key="run_model_btn")
+                st.caption(
+                    "Loads the ~1.3GB checkpoint on first use (cached in "
+                    "session). Needs the six post-fire bands."
+                )
+                if run_model or st.session_state.get("v2_probs") is not None:
+                    if st.session_state.get("v2_probs") is None:
+                        try:
+                            from data_pipeline.model_inference_v2 import (
+                                load_model,
+                                predict,
+                            )
+
+                            model = st.session_state.get("v2_model")
+                            if model is None:
+                                model = load_model()
+                                st.session_state["v2_model"] = model
+                            probs, mask = predict(post_bands[:6], model=model)
+                            st.session_state["v2_probs"] = probs
+                            st.session_state["v2_mask"] = mask
+                        except Exception as exc:
+                            st.error(f"Model inference failed: {exc}")
+                            st.session_state["v2_probs"] = None
+                    probs = st.session_state.get("v2_probs")
+                    if probs is not None:
+                        overlay_fig = render_overlay(post_bands[:6], probs)
+                        st.pyplot(overlay_fig)
+                        mask = st.session_state["v2_mask"]
+                        st.metric(
+                            "Burned fraction (model)",
+                            f"{np.mean(mask == 1):.1%}",
+                        )
             if ndvi_mode == "delta":
                 st.caption(
                     "ΔNDVI is measured relative to the pre-fire reference image."
@@ -604,6 +644,31 @@ def main():
             st.info("No recorded failures.")
         else:
             st.dataframe(pd.DataFrame(event.failures), hide_index=True, width="stretch")
+
+    with tab_model:
+        st.subheader("Burn scar model")
+        st.markdown(model_card_markdown())
+        eval_data = load_latest_eval()
+        if eval_data is None:
+            st.info(
+                "No evaluation artifact found under reports/evaluation/. "
+                "Run `PYTHONPATH=. uv run python scripts/run_evaluation.py`."
+            )
+        else:
+            st.markdown(f"**Benchmark on HLS test split (n={eval_data.get('n')})**")
+            v2 = eval_data.get("v2_300m", {})
+            rows = [
+                {"model": "V2-300M", **{k: v2.get(k) for k in ("iou", "dice", "precision", "recall")}},
+            ]
+            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+            chart = Path("reports/evaluation")
+            chart_dir = sorted(d for d in chart.iterdir() if d.is_dir())[-1] if chart.exists() and list(chart.iterdir()) else None
+            if chart_dir and (chart_dir / "benchmark.png").exists():
+                st.image(str(chart_dir / "benchmark.png"))
+            events_eval = eval_data.get("events")
+            if events_eval:
+                st.markdown("**dNBR cross-check on live events**")
+                st.write(events_eval)
 
 
 if __name__ == "__main__":
