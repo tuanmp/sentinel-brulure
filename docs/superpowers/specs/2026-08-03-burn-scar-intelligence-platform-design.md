@@ -114,8 +114,15 @@ per-event and aggregated.
   (dNBR > 0.27 ~ moderate+) on real events pulled through the existing pipeline.
   Frame as a detection-sanity check, not ground truth.
 
-**Benchmarks compared (headline eval):** V2-300M vs dNBR-threshold baseline vs
-old 100M model (existing `model_inference.py`).
+**Benchmarks (headline eval):** V2-300M on the HLS test split (labeled IoU/Dice
+plus the dNBR cross-check on live events).
+
+> **Decision:** the old 100M model is NOT a benchmark baseline. Its hand-rolled
+> decoder never loads real weights (the checkpoint stores a UPerNet-style
+> `neck.*`/`decode_head.*` decoder, but `model_inference.py` only loads
+> `backbone.*` with `strict=False`), so its output is random noise on every
+> fresh `load_model()`. The V2-300M model is scored against HLS labels plus the
+> dNBR cross-check only.
 
 Output artifact to `reports/evaluation/<run-timestamp>/`: metrics table (JSON/CSV)
 and an IoU/Dice bar chart (matplotlib), consumed by the dashboard's Model tab.

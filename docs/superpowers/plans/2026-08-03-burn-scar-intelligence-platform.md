@@ -4,7 +4,14 @@
 
 **Goal:** Upgrade the project to the Prithvi-EO-2.0-300M burn-scar model, prove it beats baselines with an evaluation harness, surface results in the Streamlit dashboard, and ship it with Docker + CI + a live deploy.
 
-**Architecture:** A standalone TerraTorch-backed inference module replaces the model work, an evaluation harness scores it against HLS-labeled data (V2-300M vs old 100M) plus a dNBR cross-check on live events, the existing Streamlit dashboard gains a burn-scar overlay and a "Model" tab reading eval artifacts, and Docker/CI/Streamlit Cloud make it shareable. The old 100M module is left untouched.
+**Architecture:** A standalone TerraTorch-backed inference module replaces the model work, an evaluation harness scores it against HLS-labeled data (V2-300M, with a dNBR cross-check on live events), the existing Streamlit dashboard gains a burn-scar overlay and a "Model" tab reading eval artifacts, and Docker/CI/Streamlit Cloud make it shareable. The old 100M module is left untouched.
+
+> **Note (decision):** The legacy 100M model is NOT used as a benchmark baseline.
+> Its hand-rolled decoder never loads real weights (the checkpoint stores a
+> UPerNet-style `neck.*`/`decode_head.*` decoder, but `model_inference.py`
+> only loads `backbone.*` with `strict=False`), so its output is random noise
+> on every fresh `load_model()`. The eval harness benchmarks V2-300M on HLS
+> labeled data plus a dNBR cross-check on live events only.
 
 **Tech Stack:** Python 3.12, PyTorch, TerraTorch 1.2.6, Lightning, HuggingFace hub, rasterio, numpy, matplotlib, Streamlit, Plotly, pandas, pytest, ruff, uv, Docker, GitHub Actions, MLflow.
 
@@ -858,6 +865,12 @@ git commit -m "feat: add binary segmentation metric helpers"
 **Files:**
 - Create: `scripts/run_evaluation.py`
 
+> **Note:** as decided during execution, this harness does NOT score the legacy
+> 100M model (its decoder is randomly initialized — see the top-of-plan note).
+> The committed script evaluates V2-300M on the HLS test split and a dNBR
+> cross-check on live events only. The code block below reflects the original
+> draft; the committed version drops `run_100m`/`mask_from_probs`/`v1_100m`.
+
 - [ ] **Step 1: Write the script**
 
 ```python
@@ -1324,10 +1337,8 @@ Then, after the `with tab_failures:` block (still inside `main()`), add:
         else:
             st.markdown(f"**Benchmark on HLS test split (n={eval_data.get('n')})**")
             v2 = eval_data.get("v2_300m", {})
-            v1 = eval_data.get("v1_100m", {})
             rows = [
                 {"model": "V2-300M", **{k: v2.get(k) for k in ("iou", "dice", "precision", "recall")}},
-                {"model": "V1-100M", **{k: v1.get(k) for k in ("iou", "dice", "precision", "recall")}},
             ]
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
             chart = Path("reports/evaluation")
@@ -1628,7 +1639,7 @@ Add a "Deployment" section and update the roadmap. Replace the `- [ ] Prithvi mo
 - Inference: `data_pipeline/model_inference_v2.py` (Prithvi-EO-2.0-300M)
 - Validate vs official: `PYTHONPATH=. uv run python scripts/validate_prithvi_v2.py`
 - Benchmark: `PYTHONPATH=. uv run python scripts/run_evaluation.py`
-  (HLS test split: V2-300M vs V1-100M, plus dNBR cross-check)
+  (HLS test split: V2-300M IoU/Dice, plus dNBR cross-check)
 - MLflow: `PYTHONPATH=. uv run python scripts/track_eval_mlflow.py [limit]`
 ```
 
@@ -1648,7 +1659,7 @@ Phase 4 gate: live URL deployed (manual step in Streamlit Cloud) + CI green.
 - `make lint` clean
 - `make test` green (integration tests skipped without `RUN_MODEL_TESTS=1`)
 - `scripts/validate_prithvi_v2.py` accuracy ≥ 0.99 vs official
-- `reports/evaluation/<ts>/summary.json` exists with v2_300m and v1_100m rows
+- `reports/evaluation/<ts>/summary.json` exists with v2_300m and events rows
 - Dashboard Model tab renders benchmark + model card locally
 - Docker image builds (if Docker available)
 - Push to GitHub → CI lint+test green → deploy dashboard to Streamlit Cloud
