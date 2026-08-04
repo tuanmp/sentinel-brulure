@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 
 from dashboard.model_view import (
+    latest_eval_dir,
     load_latest_eval,
     model_card_markdown,
     render_overlay,
@@ -17,6 +18,16 @@ def _write_eval(root: Path, ts: str, iou: float) -> Path:
         json.dumps({"v2_300m": {"iou": iou}, "n": 1}), encoding="utf-8"
     )
     return out
+
+
+def test_latest_eval_dir_picks_newest(tmp_path):
+    _write_eval(tmp_path, "20260101_000000", 0.5)
+    _write_eval(tmp_path, "20260102_000000", 0.8)
+    assert latest_eval_dir(tmp_path) == tmp_path / "20260102_000000"
+
+
+def test_latest_eval_dir_none_when_empty(tmp_path):
+    assert latest_eval_dir(tmp_path) is None
 
 
 def test_load_latest_eval_picks_newest(tmp_path):

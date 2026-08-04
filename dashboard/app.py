@@ -27,6 +27,7 @@ from dashboard.imagery import (
 )
 from dashboard.linked import build_linked_figure
 from dashboard.model_view import (
+    latest_eval_dir,
     load_latest_eval,
     model_card_markdown,
     render_overlay,
@@ -463,8 +464,10 @@ def main():
                     "Loads the ~1.3GB checkpoint on first use (cached in "
                     "session). Needs the six post-fire bands."
                 )
-                if run_model or st.session_state.get("v2_probs") is not None:
-                    if st.session_state.get("v2_probs") is None:
+                probs_key = f"v2_probs_{event.event_id}_{resolution}"
+                mask_key = f"v2_mask_{event.event_id}_{resolution}"
+                if run_model or st.session_state.get(probs_key) is not None:
+                    if st.session_state.get(probs_key) is None:
                         try:
                             from data_pipeline.model_inference_v2 import (
                                 load_model,
@@ -476,16 +479,16 @@ def main():
                                 model = load_model()
                                 st.session_state["v2_model"] = model
                             probs, mask = predict(post_bands[:6], model=model)
-                            st.session_state["v2_probs"] = probs
-                            st.session_state["v2_mask"] = mask
+                            st.session_state[probs_key] = probs
+                            st.session_state[mask_key] = mask
                         except Exception as exc:
                             st.error(f"Model inference failed: {exc}")
-                            st.session_state["v2_probs"] = None
-                    probs = st.session_state.get("v2_probs")
+                            st.session_state[probs_key] = None
+                    probs = st.session_state.get(probs_key)
                     if probs is not None:
                         overlay_fig = render_overlay(post_bands[:6], probs)
                         st.pyplot(overlay_fig)
-                        mask = st.session_state["v2_mask"]
+                        mask = st.session_state.get(mask_key)
                         st.metric(
                             "Burned fraction (model)",
                             f"{np.mean(mask == 1):.1%}",
@@ -661,8 +664,7 @@ def main():
                 {"model": "V2-300M", **{k: v2.get(k) for k in ("iou", "dice", "precision", "recall")}},
             ]
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-            chart = Path("reports/evaluation")
-            chart_dir = sorted(d for d in chart.iterdir() if d.is_dir())[-1] if chart.exists() and list(chart.iterdir()) else None
+            chart_dir = latest_eval_dir()
             if chart_dir and (chart_dir / "benchmark.png").exists():
                 st.image(str(chart_dir / "benchmark.png"))
             events_eval = eval_data.get("events")

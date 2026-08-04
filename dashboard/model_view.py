@@ -13,14 +13,19 @@ from data_pipeline.image_utils import to_rgb
 EVAL_ROOT = Path("reports") / "evaluation"
 
 
-def load_latest_eval(root: Path = EVAL_ROOT) -> dict | None:
-    """Load the most recent benchmark artifact, or None."""
+def latest_eval_dir(root: Path = EVAL_ROOT) -> Path | None:
+    """Return the most recent evaluation artifact directory, or None."""
     if not root.exists():
         return None
     dirs = sorted(d for d in root.iterdir() if d.is_dir())
-    if not dirs:
+    return dirs[-1] if dirs else None
+
+
+def load_latest_eval(root: Path = EVAL_ROOT) -> dict | None:
+    """Load the most recent benchmark artifact, or None."""
+    latest = latest_eval_dir(root)
+    if latest is None:
         return None
-    latest = dirs[-1]
     summary = latest / "summary.json"
     if not summary.exists():
         return None
