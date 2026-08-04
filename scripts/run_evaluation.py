@@ -1,6 +1,6 @@
 """Evaluation harness for burn scar models on the HLS Burn Scars dataset.
 
-Scores V2-300M and the legacy 100M model against the test split, plus a dNBR
+Scores the V2-300M model against the HLS Burn Scars test split, plus a dNBR
 cross-check on live events from the event store. Writes a benchmark artifact
 to reports/evaluation/<timestamp>/.
 """
@@ -25,7 +25,6 @@ from analytics.evaluation import (
     binary_metrics,
     dnbr_mask,
 )
-from data_pipeline.model_inference import run_inference as run_100m
 from data_pipeline.model_inference_v2 import load_model
 from data_pipeline.model_inference_v2 import predict as predict_v2
 from data_pipeline.model_inference_v2 import run_inference as run_v2
@@ -90,26 +89,22 @@ def read_mask(path: Path) -> np.ndarray:
         return src.read(1)
 
 
-def mask_from_probs(probs: np.ndarray) -> np.ndarray:
-    return (probs >= 0.5).astype(np.uint8)
-
-
 def evaluate_split(data_root: Path, prefixes: list[str], limit: int, device: str) -> dict:
+    """Score V2-300M against the HLS test split.
+
+    Returns aggregate metrics for the V2-300M model only.
+    """
     v2_model = load_model(device=device)
-    rows_v2, rows_100m = [], []
+    rows_v2 = []
     for prefix in prefixes[:limit]:
         image, mask_path = find_chip(data_root, prefix)
         true = read_mask(mask_path)
-        probs_v2, mask_v2 = run_v2(str(image), model=v2_model, device=device)
+        _, mask_v2 = run_v2(str(image), model=v2_model, device=device)
         rows_v2.append(binary_metrics(mask_v2, true))
-
-        probs_100m = run_100m(str(image), device=device)
-        rows_100m.append(binary_metrics(mask_from_probs(probs_100m), true))
 
     return {
         "n": len(rows_v2),
         "v2_300m": aggregate_metrics(rows_v2),
-        "v1_100m": aggregate_metrics(rows_100m),
     }
 
 
@@ -138,17 +133,14 @@ def write_artifact(out_dir: Path, result: dict) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "summary.json").write_text(json.dumps(result, indent=2))
 
-    labels = ["V2-300M", "V1-100M"]
-    ious = [result["v2_300m"]["iou"], result["v1_100m"]["iou"]]
-    dices = [result["v2_300m"]["dice"], result["v1_100m"]["dice"]]
+    labels = ["IoU", "Dice"]
+    values = [result["v2_300m"]["iou"], result["v2_300m"]["dice"]]
     x = np.arange(len(labels))
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.bar(x - 0.2, ious, 0.4, label="IoU")
-    ax.bar(x + 0.2, dices, 0.4, label="Dice")
+    ax.bar(x, values, 0.5)
     ax.set_xticks(x, labels)
     ax.set_ylim(0, 1)
-    ax.set_title(f"Burn scar benchmark on HLS test split (n={result['n']})")
-    ax.legend()
+    ax.set_title(f"V2-300M on HLS test split (n={result['n']})")
     fig.tight_layout()
     fig.savefig(out_dir / "benchmark.png", dpi=150)
     plt.close(fig)
@@ -166,7 +158,7 @@ def main():
     device = args.device or "cpu"
     data_root = hls_data_root(CACHE_ROOT)
     prefixes = test_split_prefixes(CACHE_ROOT)
-    print(f"Evaluating {len(prefixes[:args.limit])} HLS test chips with V2-300M and V1-100M...")
+    print(f"Evaluating {len(prefixes[:args.limit])} HLS test chips with V2-300M...")
     result = evaluate_split(data_root, prefixes, args.limit or len(prefixes), device)
 
     print("dNBR cross-check on live events...")
