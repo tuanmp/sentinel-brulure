@@ -13,3 +13,7 @@ wheels/
 
 # Generated fire analytics artifacts
 reports/
+
+# MLflow local tracking store
+mlruns/
+mlflow.db
