@@ -129,8 +129,12 @@ def dnbr_crosscheck(
             continue
         dnbr = compute_nbr(pre) - compute_nbr(post)
         _, mask_v2 = predict_v2(post[:6], model=model, device=device)
-        baseline = dnbr_mask(dnbr).astype(np.uint8)
+        baseline = dnbr_mask(dnbr).astype(np.int16)
+        baseline[~np.isfinite(dnbr)] = -1
         rows.append(binary_metrics(mask_v2, baseline))
+    if not rows:
+        print("WARNING: no cached pre/post imagery found for the evaluated events; "
+              "the dNBR cross-check is empty.")
     return {"n": len(rows), "dNBR_crosscheck": aggregate_metrics(rows)}
 
 

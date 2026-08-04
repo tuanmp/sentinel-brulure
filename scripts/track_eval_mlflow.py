@@ -16,10 +16,13 @@ def main():
         if limit:
             cmd += ["--limit", str(limit)]
         subprocess.run(cmd, check=True, cwd=str(ROOT))
-        artifact_dir = max(
-            (ROOT / "reports" / "evaluation").glob("*/"),
-            key=lambda p: p.stat().st_mtime,
-        )
+        eval_dir = ROOT / "reports" / "evaluation"
+        if not eval_dir.exists() or not list(eval_dir.glob("*/summary.json")):
+            raise RuntimeError(
+                "no evaluation artifact found under reports/evaluation/; "
+                "run_evaluation.py must produce one before tracking"
+            )
+        artifact_dir = max(eval_dir.glob("*/"), key=lambda p: p.stat().st_mtime)
         import json
 
         summary = json.loads(
