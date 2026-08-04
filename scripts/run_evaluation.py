@@ -4,6 +4,7 @@ Scores the V2-300M model against the HLS Burn Scars test split, plus a dNBR
 cross-check on live events from the event store. Writes a benchmark artifact
 to reports/evaluation/<timestamp>/.
 """
+
 import argparse
 import json
 import sys
@@ -66,7 +67,9 @@ def test_split_prefixes(cache_dir: Path) -> list[str]:
             cache_dir=str(cache_dir),
         )
     )
-    return [line.strip() for line in split_file.read_text().splitlines() if line.strip()]
+    return [
+        line.strip() for line in split_file.read_text().splitlines() if line.strip()
+    ]
 
 
 def find_chip(data_root: Path, prefix: str) -> tuple[Path, Path]:
@@ -89,17 +92,18 @@ def read_mask(path: Path) -> np.ndarray:
         return src.read(1)
 
 
-def evaluate_split(data_root: Path, prefixes: list[str], limit: int, device: str) -> dict:
+def evaluate_split(
+    data_root: Path, prefixes: list[str], limit: int, device: str, model
+) -> dict:
     """Score V2-300M against the HLS test split.
 
     Returns aggregate metrics for the V2-300M model only.
     """
-    v2_model = load_model(device=device)
     rows_v2 = []
     for prefix in prefixes[:limit]:
         image, mask_path = find_chip(data_root, prefix)
         true = read_mask(mask_path)
-        _, mask_v2 = run_v2(str(image), model=v2_model, device=device)
+        _, mask_v2 = run_v2(str(image), model=model, device=device)
         rows_v2.append(binary_metrics(mask_v2, true))
 
     return {
@@ -108,14 +112,15 @@ def evaluate_split(data_root: Path, prefixes: list[str], limit: int, device: str
     }
 
 
-def dnbr_crosscheck(event_root: Path, limit: int, resolution: int, device: str) -> dict:
+def dnbr_crosscheck(
+    event_root: Path, limit: int, resolution: int, device: str, model
+) -> dict:
     from analytics.store import EventStore
     from dashboard.imagery import load_cached_phase
     from data_pipeline.sentinel_utils import compute_nbr
 
     store = EventStore(event_root)
     events = store.list_events()
-    model = load_model(device=device)
     rows = []
     for event in events[:limit]:
         pre = load_cached_phase(event, "before", resolution)
@@ -148,21 +153,30 @@ def write_artifact(out_dir: Path, result: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Cap chips evaluated (for smoke runs)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Cap chips/events evaluated (0 or omitted = all chips, 10 events)",
+    )
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--events-root", type=Path, default=Path("reports/events"))
     parser.add_argument("--resolution", type=int, default=60)
     args = parser.parse_args()
 
     device = args.device or "cpu"
+    model = load_model(device=device)
     data_root = hls_data_root(CACHE_ROOT)
     prefixes = test_split_prefixes(CACHE_ROOT)
-    print(f"Evaluating {len(prefixes[:args.limit])} HLS test chips with V2-300M...")
-    result = evaluate_split(data_root, prefixes, args.limit or len(prefixes), device)
+    print(f"Evaluating {len(prefixes[: args.limit])} HLS test chips with V2-300M...")
+    result = evaluate_split(
+        data_root, prefixes, args.limit or len(prefixes), device, model
+    )
 
     print("dNBR cross-check on live events...")
-    result["events"] = dnbr_crosscheck(args.events_root, args.limit or 10, args.resolution, device)
+    result["events"] = dnbr_crosscheck(
+        args.events_root, args.limit or 10, args.resolution, device, model
+    )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = EVAL_ROOT / timestamp
