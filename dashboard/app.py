@@ -1,10 +1,21 @@
 import io
 import json
+import os
 import sys
 from datetime import date as _date
 from datetime import datetime as _datetime
 from datetime import timedelta
 from pathlib import Path
+
+# Streamlit Cloud serves secrets via st.secrets; expose them as env vars so
+# the data pipeline (which reads os.environ) works unchanged.
+try:
+    import streamlit as st
+
+    for _k, _v in st.secrets.items():
+        os.environ.setdefault(_k, str(_v))
+except Exception:
+    pass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
