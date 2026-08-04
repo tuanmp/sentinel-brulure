@@ -63,7 +63,23 @@ See `.env_template` for the full list.
 ## Roadmap
 
 - [x] Data pipeline (Sentinel-2 fetching, NBR/dNBR)
-- [ ] FIRMS integration (fire event polling)
-- [ ] Prithvi model fine-tuning (HLS Burn Scar dataset)
+- [x] FIRMS integration (fire event polling)
+- [x] Prithvi-EO-2.0-300M burn scar inference + evaluation harness
+- [ ] Prithvi fine-tuning on Sentinel-2 data (designed, not run)
 - [ ] FastAPI backend
 - [ ] React frontend with live map
+
+## Deployment
+
+- **Local:** `docker compose up --build` then open http://localhost:8501
+- **Live:** deploy the repo to Streamlit Community Cloud
+  (main file `dashboard/app.py`). Add your API keys under
+  Settings → Secrets (keys must match `.env_template`).
+
+## Burn Scar Model
+
+- Inference: `data_pipeline/model_inference_v2.py` (Prithvi-EO-2.0-300M)
+- Validate vs official: `PYTHONPATH=. uv run python scripts/validate_prithvi_v2.py`
+- Benchmark: `PYTHONPATH=. uv run python scripts/run_evaluation.py`
+  (HLS test split: V2-300M IoU/Dice, plus dNBR cross-check)
+- MLflow: `PYTHONPATH=. uv run python scripts/track_eval_mlflow.py [limit]`
