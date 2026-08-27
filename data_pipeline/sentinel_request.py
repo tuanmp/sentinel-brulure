@@ -7,7 +7,7 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 
-load_dotenv("../.env")
+load_dotenv()
 
 from matplotlib import pyplot as plt
 from oauthlib.oauth2 import BackendApplicationClient
@@ -66,8 +66,12 @@ function evaluatePixel(sample) {
 
 
 def fetch_token():
-    assert os.getenv("sentinel_client_id") is not None, "Missing Sentinel API client ID in environment variables"
-    assert os.getenv("sentinel_client_secret") is not None, "Missing Sentinel API client secret in environment variables"
+    assert os.getenv("sentinel_client_id") is not None, (
+        "Missing Sentinel API client ID in environment variables"
+    )
+    assert os.getenv("sentinel_client_secret") is not None, (
+        "Missing Sentinel API client secret in environment variables"
+    )
     client = BackendApplicationClient(client_id=os.getenv("sentinel_client_id"))
     oauth = OAuth2Session(client=client)
 
@@ -139,7 +143,9 @@ def make_request(json_body: dict):
     return response
 
 
-def make_json(bbox, start, end, height, width, evalscript=evalscript):
+def make_json(
+    bbox, start, end, height, width, evalscript=evalscript, mosaicking="leastRecent"
+):
     input_field = {
         "bounds": {
             "bbox": [bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y],
@@ -154,7 +160,7 @@ def make_json(bbox, start, end, height, width, evalscript=evalscript):
                         "from": f"{start}T00:00:00Z",
                         "to": f"{end}T23:59:59Z",
                     },
-                    "mosaickingOrder": "leastRecent",
+                    "mosaickingOrder": mosaicking,
                 },
                 "type": "sentinel-2-l2a",
             }
@@ -188,36 +194,63 @@ def fetch_large_bbox(
     split_result=None,
 ):
     if split_result is None:
-        flat_bboxes, n_rows, n_cols = compute_split_bboxes(bbox, resolution)
+        bboxes, n_rows, n_cols = compute_split_bboxes(bbox, resolution)
     else:
-        flat_bboxes, n_rows, n_cols = split_result
+        bboxes, n_rows, n_cols = split_result
 
     sub_images = []
     size = None
-    for i in range(n_rows):
-        this_row = []
-        for j in range(n_cols):
-            sub_bbox = flat_bboxes[i * n_cols + j]
+
+    print(bboxes)
+    for col in bboxes:
+        this_col = []
+        for sub_bbox in col:
             if size is None:
                 w, h = bbox_to_dimensions(sub_bbox, resolution=resolution)
                 size = (h, w)
                 logging.info(f"Sub-tile pixel size: {size}")
-            logging.info(f"  Fetching sub-tile ({i+1}, {j+1})/{(n_rows, n_cols)}...")
-            bands = fetch_bands(time_interval, bbox=sub_bbox, height=size[0], width=size[1])
-            this_row.append(bands)
-        sub_images.append(this_row)
+            logging.info(f"  Fetching sub-tile with bbox: {sub_bbox}...")
+            bands = fetch_bands(
+                time_interval, bbox=sub_bbox, height=size[0], width=size[1]
+            )
+            print(bands.shape)
+            this_col.append(bands)
+        sub_images.append(this_col)
 
-    stitched = stitch_tiles(sub_images, n_rows=n_rows, n_cols=n_cols)
+    # for i in range(n_rows):
+    #     this_row = []
+    #     for j in range(n_cols):
+    #         sub_bbox = bboxes[i * n_cols + j]
+    #         if size is None:
+    #             w, h = bbox_to_dimensions(sub_bbox, resolution=resolution)
+    #             size = (h, w)
+    #             logging.info(f"Sub-tile pixel size: {size}")
+    #         logging.info(f"  Fetching sub-tile ({i+1}, {j+1})/{(n_rows, n_cols)}...")
+    #         bands = fetch_bands(time_interval, bbox=sub_bbox, height=size[0], width=size[1])
+    #         print(bands.shape)
+    #         this_row.append(bands)
+    #     sub_images.append(this_row)
+
+    logging.info(
+        f"Stitching {len(sub_images)} rows and {len(sub_images[0])} columns of sub-tiles..."
+    )
+    stitched = stitch_tiles(sub_images)
     return stitched
 
 
-def fetch_bbox(time_interval, bbox, resolution=RESOLUTION):
+def fetch_bbox(time_interval, bbox, resolution=RESOLUTION, mosaicking="leastRecent"):
     split_result = compute_split_bboxes(bbox, resolution)
     sub_bboxes, n_rows, n_cols = split_result
 
     if n_rows == 1 and n_cols == 1:
         width, height = bbox_to_dimensions(bbox, resolution=resolution)
-        return fetch_bands(time_interval, bbox=bbox, height=height, width=width)
+        return fetch_bands(
+            time_interval,
+            bbox=bbox,
+            height=height,
+            width=width,
+            mosaicking=mosaicking,
+        )
 
     return fetch_large_bbox(
         bbox,
@@ -227,8 +260,18 @@ def fetch_bbox(time_interval, bbox, resolution=RESOLUTION):
     )
 
 
-def fetch_bands(time_interval, bbox, height, width, evalscript=evalscript):
-    data = make_json(bbox, time_interval[0], time_interval[1], height, width, evalscript)
+def fetch_bands(
+    time_interval, bbox, height, width, evalscript=evalscript, mosaicking="leastRecent"
+):
+    data = make_json(
+        bbox,
+        time_interval[0],
+        time_interval[1],
+        height,
+        width,
+        evalscript,
+        mosaicking,
+    )
     response = make_request(data)
     bands = extract_bands_from_response(response)
     if bands is None:
@@ -237,20 +280,73 @@ def fetch_bands(time_interval, bbox, height, width, evalscript=evalscript):
     return bands
 
 
-def process_fire_event(event, resolution=RESOLUTION):
+def search_sentinel_data(bbox, time_interval):
+    query = {
+        "bbox": f"{bbox.min_x},{bbox.min_y},{bbox.max_x},{bbox.max_y}",
+        "datetime": f"{time_interval[0]}T00:00:00Z/{time_interval[1]}T00:00:00Z",
+        "collections": "sentinel-2-l2a",
+        "limit": 1,
+    }
+
+    token = _token_from_env()
+    if token is None or time.time() > token.get("expires_at", 0) - SAFE_MARGIN:
+        logging.warning("Token is expired or about to expire, fetching a new one...")
+        token = fetch_token()
+
+    url = "https://sh.dataspace.copernicus.eu/catalog/v1/search"
+    response = requests.get(
+        url, params=query, headers={"Authorization": f"Bearer {token['access_token']}"}
+    )
+
+    if response.status_code != 200:
+        logging.error(
+            f"Search request failed with status code {response.status_code}: {response.text}"
+        )
+        return None
+
+    json_response = response.json()
+
+    return json_response.get("features", [])
+
+
+def has_imagery(bbox, time_interval):
+    """True if Sentinel-2 L2A scenes exist for the window.
+
+    Returns False only on a definitive empty result (HTTP 200, zero features).
+    Returns True optimistically when the catalog query itself errors (None), so
+    a transient outage lets the calling phase attempt and fail/retry naturally
+    instead of being permanently skipped.
+    """
+    features = search_sentinel_data(bbox, time_interval)
+    return True if features is None else bool(features)
+
+
+def compute_post_window(start_date: str, end_date: str) -> tuple[str, str]:
+    """Compute the post-fire imagery window, clamped to start strictly after
+    the fire start so short fires don't get a 'post' window that precedes them."""
+    fire_start = datetime.strptime(start_date, "%Y-%m-%d")
+    fire_end = datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=3)
+    post_start = max(fire_start + timedelta(days=1), fire_end)
+    return (
+        post_start.strftime("%Y-%m-%d"),
+        (post_start + timedelta(days=15)).strftime("%Y-%m-%d"),
+    )
+
+
+def process_fire_event(event, resolution=RESOLUTION, use_model=False):
     bbox = BBox(event["bbox"], crs=CRS.WGS84)
 
     fire_start = datetime.strptime(event["start_date"], "%Y-%m-%d")
     fire_end = datetime.strptime(event["end_date"], "%Y-%m-%d")
 
+    # subtract 1 day from fire_end
+    fire_end -= timedelta(days=3)
+
     pre_window = (
         (fire_start - timedelta(days=15)).strftime("%Y-%m-%d"),
         (fire_start - timedelta(days=1)).strftime("%Y-%m-%d"),
     )
-    post_window = (
-        fire_end.strftime("%Y-%m-%d"),
-        (fire_end + timedelta(days=15)).strftime("%Y-%m-%d"),
-    )
+    post_window = compute_post_window(event["start_date"], event["end_date"])
 
     logging.info(f"\nProcessing event #{event['cluster_id']}")
     logging.info(f"  Pre-fire window:  {pre_window}")
@@ -258,6 +354,23 @@ def process_fire_event(event, resolution=RESOLUTION):
     logging.info(f"  BBox: {event['bbox']}")
 
     pre_bands = fetch_bbox(pre_window, bbox, resolution=resolution)
+
+    logging.info("Searching for Sentinel data in post-fire window...")
+    search_features = []
+
+    while (not search_features) and fire_end > fire_start:
+        search_features = search_sentinel_data(bbox, post_window)
+        if search_features:
+            break
+        fire_end -= timedelta(days=1)
+        post_window = (
+            fire_end.strftime("%Y-%m-%d"),
+            (fire_end + timedelta(days=1)).strftime("%Y-%m-%d"),
+        )
+        logging.warning(
+            f"No data found for post-fire window. Retrying with an earlier window: {post_window}"
+        )
+
     post_bands = fetch_bbox(post_window, bbox, resolution=resolution)
 
     nbr_pre = compute_nbr(pre_bands)
@@ -269,13 +382,56 @@ def process_fire_event(event, resolution=RESOLUTION):
         axis=0,
     )
 
-    return {
+    result = {
         "event": event,
         "pre_bands": pre_bands,
         "post_bands": post_bands,
         "dnbr": dnbr,
         "tensor": post_8ch,
     }
+
+    if use_model:
+        try:
+            import rasterio
+            from rasterio.transform import from_bounds
+
+            from .model_inference import run_inference, save_mask
+
+            # Save post_bands as temporary GeoTIFF for model inference
+            temp_geotiff = f"/tmp/post_fire_{event['cluster_id']}.tif"
+            height, width = post_bands.shape[1], post_bands.shape[2]
+
+            with rasterio.open(
+                temp_geotiff,
+                "w",
+                driver="GTiff",
+                height=height,
+                width=width,
+                count=6,
+                dtype=post_bands.dtype,
+                crs="EPSG:4326",
+                transform=from_bounds(*event["bbox"], width=width, height=height),
+            ) as dst:
+                dst.write(post_bands[:6])
+
+            # Run model inference
+            logging.info("Running Prithvi burn scar model...")
+            burn_scar_probs = run_inference(temp_geotiff)
+
+            # Save burn scar mask
+            output_mask = f"burn_scar_mask_{event['cluster_id']}.tif"
+            save_mask(burn_scar_probs, output_mask, temp_geotiff)
+            logging.info(f"Burn scar mask saved to: {output_mask}")
+
+            result["burn_scar_probs"] = burn_scar_probs
+            result["burn_scar_mask_path"] = output_mask
+
+        except Exception as e:
+            logging.error(f"Model inference failed: {e}")
+            result["burn_scar_probs"] = None
+            result["burn_scar_mask_path"] = None
+
+    return result
 
 
 def plot_event_result(result, output_path="rhodes_dnbr_lowres.png"):

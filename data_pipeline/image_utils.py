@@ -10,7 +10,9 @@ from rasterio.transform import from_bounds
 from sentinelhub import BBox, bbox_to_dimensions
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s [%(levelname)s] %(message)s")
-MAX_DIM = 2500
+# maximum dimension allowed by sentinels is 2500x2500 pixels
+# but we use 2400 to leave some buffer and avoid potential issues with edge cases
+MAX_DIM = 2400
 RESOLUTION = 10
 OVERLAP = 0.1
 
@@ -35,27 +37,45 @@ def compute_split_bboxes(bbox: BBox, resolution=RESOLUTION, max_pixels=MAX_DIM):
     n_cols = math.ceil(full_w / max_pixels)
     n_rows = math.ceil(full_h / max_pixels)
 
+    # print(f"Full image size HxW = {full_h}x{full_w} pixels at {resolution}m resolution")
+    # print(f"Splitting into {n_rows} rows x {n_cols} cols of sub-tiles with ~{full_w/n_cols:.0f}x{full_h/n_rows:.0f} pixels each")
+
     if n_cols == 1 and n_rows == 1:
         return [[bbox]], n_rows, n_cols
 
     partitioned_boxes = bbox.get_partition(num_x=n_cols, num_y=n_rows)
 
+    # the partitioned boxes are organized in column-major order
+    # meaning the first index is column and second index is row
+
     for i, col in enumerate(partitioned_boxes):
         for j, sub_bbox in enumerate(col):
-            logging.info(f"Subtile ({i}, {j}): {sub_bbox}")
+            logging.info(f"Subtile (col {i}, row {j}): {sub_bbox}")
 
-    flat = [sub for col in partitioned_boxes for sub in col]
-    return flat, n_rows, n_cols
+    # flat = [sub for col in partitioned_boxes for sub in col]
+    return partitioned_boxes, n_rows, n_cols
 
 
 def stitch_tiles(sub_images, n_rows=None, n_cols=None):
-    if n_rows is not None and n_cols is not None:
-        rows = []
-        for r in range(n_rows):
-            row_tiles = sub_images[r * n_cols : (r + 1) * n_cols]
-            rows.append(np.concatenate(list(row_tiles), axis=1))
-        return np.concatenate(rows, axis=0)
 
+    # if n_rows and n_cols are provided, expect a flat list of sub_images in col-major order
+    # All tiles are in (C, H, W) format
+    if n_rows is not None and n_cols is not None:
+        # rows = []
+        # for r in range(n_rows):
+        #     row_tiles = sub_images[r * n_cols : (r + 1) * n_cols]
+        #     rows.append(np.concatenate(list(row_tiles), axis=2))
+        # return np.concatenate(rows, axis=1)
+        cols = []
+        for c in range(n_cols):
+            col_tiles = sub_images[c * n_cols : (c + 1) * n_cols]
+            cols.append(np.concatenate(list(reversed(col_tiles)), axis=1))
+        return np.concatenate(cols, axis=2)
+
+
+    # if n_rows and n_cols are not provided, expect a nested list of rows
+    # sub_images = [[row0_tile0, row0_tile1, ...], [row1_tile0, row1_tile1, ...], ...]
+    # Each row is concatenated along width (axis=2), then rows along height (axis=1)
     cols = []
     for col in sub_images:
         cols.append(np.concatenate(list(reversed(col)), axis=1))

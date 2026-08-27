@@ -1,7 +1,17 @@
+import importlib
+
+import dotenv
 import numpy as np
 from sentinelhub import CRS, BBox
 
 from data_pipeline import sentinel_request as sr
+
+
+def test_sentinel_request_loads_env_from_project_root(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: calls.append(a))
+    importlib.reload(sr)
+    assert calls == [()]
 
 
 def _make_event(bbox):
@@ -27,7 +37,9 @@ def test_fetch_bbox_small_area_single_request_path(monkeypatch):
     def fake_compute_split_bboxes(_bbox, resolution=10):
         return [[BBox([0.0, 0.0, 0.1, 0.1], crs=CRS.WGS84)]], 1, 1
 
-    def fake_fetch_bands(time_interval, bbox, height, width, evalscript=sr.evalscript):
+    def fake_fetch_bands(
+        time_interval, bbox, height, width, evalscript=sr.evalscript, mosaicking="leastRecent"
+    ):
         call_counter["count"] += 1
         assert (height, width) == (4, 5)
         return _fake_bands(height=height, width=width, nir=0.7, swir2=0.2)
@@ -45,6 +57,69 @@ def test_fetch_bbox_small_area_single_request_path(monkeypatch):
 
     assert call_counter["count"] == 1
     assert bands.shape == (7, 4, 5)
+
+
+def test_compute_post_window_one_day_fire_clamps_to_after_fire():
+    start, stop = sr.compute_post_window("2026-04-11", "2026-04-11")
+    assert start == "2026-04-12"
+    assert stop == "2026-04-27"
+
+
+def test_compute_post_window_long_fire_uses_end_minus_three():
+    start, stop = sr.compute_post_window("2026-07-01", "2026-07-20")
+    assert start == "2026-07-17"
+    assert stop == "2026-08-01"
+
+
+def test_make_json_defaults_to_least_recent_mosaicking():
+    body = sr.make_json(
+        BBox([0.0, 0.0, 0.1, 0.1], crs=CRS.WGS84), "2026-07-01", "2026-07-02", 4, 5
+    )
+    assert body["input"]["data"][0]["dataFilter"]["mosaickingOrder"] == "leastRecent"
+
+
+def test_make_json_supports_least_cc_mosaicking():
+    body = sr.make_json(
+        BBox([0.0, 0.0, 0.1, 0.1], crs=CRS.WGS84),
+        "2026-07-01",
+        "2026-07-02",
+        4,
+        5,
+        mosaicking="leastCC",
+    )
+    assert body["input"]["data"][0]["dataFilter"]["mosaickingOrder"] == "leastCC"
+
+
+def test_has_imagery_false_when_no_scenes(monkeypatch):
+    monkeypatch.setattr(sr, "search_sentinel_data", lambda _bbox, _ti: [])
+    assert (
+        sr.has_imagery(
+            BBox([0, 0, 0.1, 0.1], crs=CRS.WGS84), ("2026-01-01", "2026-01-10")
+        )
+        is False
+    )
+
+
+def test_has_imagery_true_when_scenes_exist(monkeypatch):
+    monkeypatch.setattr(
+        sr, "search_sentinel_data", lambda _bbox, _ti: [{"id": "S2A_x"}]
+    )
+    assert (
+        sr.has_imagery(
+            BBox([0, 0, 0.1, 0.1], crs=CRS.WGS84), ("2026-01-01", "2026-01-10")
+        )
+        is True
+    )
+
+
+def test_has_imagery_optimistic_when_query_errors(monkeypatch):
+    monkeypatch.setattr(sr, "search_sentinel_data", lambda _bbox, _ti: None)
+    assert (
+        sr.has_imagery(
+            BBox([0, 0, 0.1, 0.1], crs=CRS.WGS84), ("2026-01-01", "2026-01-10")
+        )
+        is True
+    )
 
 
 def test_fetch_bbox_large_area_partitioned_into_subtiles(monkeypatch):

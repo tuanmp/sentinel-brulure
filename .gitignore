@@ -10,3 +10,14 @@ wheels/
 .venv
 
 .env
+
+# Generated fire analytics artifacts
+reports/
+
+# Generated raster/plot outputs (keep out of git)
+*.tif
+*.png
+
+# MLflow local tracking store
+mlruns/
+mlflow.db
